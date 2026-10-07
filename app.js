@@ -320,7 +320,7 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(function () { setTimeout(autoSortLectures, 1500); }); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(clearAllOnce).then(function () { return getDoc(doc(db, "users", uid, "meta", "lectures1")).then(function (s) { if (!s.exists()) return setDoc(doc(db, "users", uid, "meta", "lectures1"), { at: Date.now(), skipped: true }); }); }); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
    otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
@@ -598,11 +598,28 @@ function ensureFolder(name) {
 }
 /* A whole folder: the first level of subfolders becomes folders here (e.g. "Level 3 Esports/Neil/x.docx" goes in "Neil").
    Files sitting directly in the chosen folder go in a folder named after it. */
+/* Uploading a whole folder (like Level 3 Esports): every file goes into Level 2 or Level 3, and Level 3 files
+   go into their lecture. The college folder is laid out as <Lecturer> Esports/..., with last year's work in
+   subfolders called "Esports 2" or "Esports level 2", so:
+   - a "level 2" / "Esports 2" folder anywhere in the path -> Level 2
+   - otherwise Level 3, in the lecture that lecturer teaches (Kiran's coaching files go to Esports Coaching)
+   - no lecturer folder: the unit number in the name (Unit 1-4), then words in the name, decide the lecture. */
+var LECTURER_LECTURE = { clive: "Enterprise & Entrepreneurship in Esports", kiran: "Introduction to Esports", leah: "Video Production", leigh: "Games Design", neil: "Esports Skills, Strategies and Analysis", sian: "Health, Wellbeing and Fitness for Esports Players", bernice: "ASBW", vicky: "GCSE Maths" };
+var UNIT_LECTURE = { 1: "Introduction to Esports", 2: "Esports Skills, Strategies and Analysis", 3: "Enterprise & Entrepreneurship in Esports", 4: "Health, Wellbeing and Fitness for Esports Players" };
+function classifyRel(rel) {
+  var parts = rel.split("/"), name = parts[parts.length - 1], dirs = parts.slice(0, -1);
+  var level2 = dirs.some(function (d) { return /^esports\s*2$|level\s*2|esports\s*level\s*2/i.test(d.trim()); });
+  if (level2) return { level: 2, lecture: "" };
+  var lec = "";
+  dirs.forEach(function (d) { var k = d.trim().split(/\s+/)[0].toLowerCase(); if (!lec && LECTURER_LECTURE[k]) lec = LECTURER_LECTURE[k]; });
+  if (lec === "Introduction to Esports" && /coach/i.test(name)) lec = "Esports Coaching";
+  if (!lec) { var u = /unit[\s_-]*(\d+)/i.exec(name); if (u && UNIT_LECTURE[+u[1]]) lec = UNIT_LECTURE[+u[1]]; }
+  if (!lec) lec = lectureScore(name.replace(/[_\-.]+/g, " "));
+  return { level: 3, lecture: lec };
+}
 function folderFor(rel) {
-  var parts = rel.split("/");
-  if (parts.length >= 3) return ensureFolder(parts[1]);
-  if (parts.length === 2) return ensureFolder(parts[0]);
-  return Promise.resolve(realTarget());
+  var c = classifyRel(rel);
+  return ensureFolder(c.level === 2 ? "Level 2" : "Level 3").then(function (id) { return { folder: id, lecture: c.lecture }; });
 }
 
 $("pick").addEventListener("click", function () { $("fileInput").click(); });
@@ -664,8 +681,10 @@ function pump() {
   while (running < 3 && waiting.length) {
     running++;
     (function (it) {
-      (it.rel ? folderFor(it.rel) : Promise.resolve(it.target)).then(function (folder) {
-        var existing = files.filter(function (f) { return !f.deletedAt && f.name === it.file.name && realFolder(f.folder) === realFolder(folder); })[0];
+      (it.rel ? folderFor(it.rel) : Promise.resolve({ folder: it.target, lecture: it.lecture })).then(function (dest) {
+        var folder = dest.folder; it.lecture = dest.lecture;
+        /* Same file again: matched by its path inside the uploaded folder, or by name and folder for single files. */
+        var existing = files.filter(function (f) { return !f.deletedAt && (it.rel ? f.rel === it.rel : (f.name === it.file.name && realFolder(f.folder) === realFolder(folder))); })[0];
         if (existing && existing.size === it.file.size && existing.srcModified === it.file.lastModified) {
           it.row.querySelector(".pc").textContent = "already up to date";
           setTimeout(function () { it.row.remove(); }, 2500);
@@ -781,6 +800,21 @@ function sortIntoLectures(showMsg) {
     if (showMsg) note(n ? n + " of " + todo.length + " files sorted into lecture folders. " + (todo.length - n ? (todo.length - n) + " couldn't be matched and are still loose in Level 3." : "") : "None of the " + todo.length + " loose files could be matched to a lecture.");
     return n;
   });
+}
+/* One-off (you asked to start again): move every file to the Bin. They stay restorable for 30 days; Empty bin removes them for good. */
+function clearAllOnce() {
+  var flag = doc(db, "users", uid, "meta", "clear1");
+  return getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    var t = Date.now(), live = files.filter(function (f) { return !f.deletedAt; }), chain = Promise.resolve();
+    for (var i = 0; i < live.length; i += 400) (function (slice) {
+      chain = chain.then(function () { var b = writeBatch(db); slice.forEach(function (f) { b.update(doc(filecol(), f.id), { deletedAt: t }); }); return b.commit(); });
+    })(live.slice(i, i + 400));
+    return chain.then(function () {
+      if (live.length) note(live.length + " files moved to the Bin so you can start fresh. Upload your Level 3 Esports folder with \u201cChoose a whole folder\u201d.");
+      return setDoc(flag, { at: t, binned: live.length });
+    });
+  }).catch(function (e) { note("Couldn't clear the files: " + (e.code || e.message)); });
 }
 function autoSortLectures() {
   var flag = doc(db, "users", uid, "meta", "lectures1");
