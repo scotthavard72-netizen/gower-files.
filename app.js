@@ -86,17 +86,19 @@ function start() {
   getDoc(initRef).then(function (s) {
     if (s.exists()) return;
     var b = writeBatch(db);
-    DEFAULT_FOLDERS.forEach(function (n, i) { b.set(doc(fcol(), "f" + (i + 1)), { name: n, order: i }); });
+    b.set(doc(fcol(), "home"), { name: "Home", order: 0 });
     b.set(initRef, { at: Date.now() });
     return b.commit();
   }).catch(function (e) { note("Couldn't set up folders: " + e.message); });
   unsubs.push(onSnapshot(fcol(), function (s) {
     folders = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; }).sort(function (a, b) { return (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(b.name); });
+    foldersLoaded = true; maybeTidy();
     liveRender();
   }, function (e) { note("Can't load folders: " + e.message); }));
   unsubs.push(onSnapshot(filecol(), function (s) {
     files = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; });
     if (!purged) { purged = true; purgeBin(); cleanShares(); }
+    filesLoaded = true; maybeTidy();
     liveRender();
   }, function (e) { note("Can't load files: " + e.message); }));
 }
@@ -275,6 +277,22 @@ function download(path, name) {
   getDownloadURL(ref(storage, path)).then(function (url) {
     var a = document.createElement("a"); a.href = url; a.download = name; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove();
   }).catch(fail("download"));
+}
+var foldersLoaded = false, filesLoaded = false, tidied = false;
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders(); } }
+/* One-off tidy-up: remove the lecture-name folders that were added at setup. Their files move to Inbox; nothing is deleted. */
+function removeUnitFolders() {
+  var flag = doc(db, "users", uid, "meta", "cleanup1");
+  getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    var names = DEFAULT_FOLDERS.filter(function (n) { return n !== "Home"; }).map(function (n) { return n.toLowerCase(); });
+    var gone = folders.filter(function (f) { return names.indexOf(String(f.name).toLowerCase()) >= 0; }).map(function (f) { return f.id; });
+    var b = writeBatch(db);
+    files.forEach(function (f) { if (gone.indexOf(f.folder) >= 0) b.update(doc(filecol(), f.id), { folder: "inbox" }); });
+    gone.forEach(function (id) { b.delete(doc(fcol(), id)); });
+    b.set(flag, { at: Date.now(), removed: gone.length });
+    return b.commit();
+  }).catch(function (e) { note("Couldn't tidy folders: " + (e.code || e.message)); });
 }
 function deletePaths(paths) {
   return Promise.all(paths.map(function (p) { return deleteObject(ref(storage, p)).catch(function (e) { if (e.code !== "storage/object-not-found") throw e; }); }));
