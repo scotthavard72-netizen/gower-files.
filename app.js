@@ -19,7 +19,7 @@ var LECTURES = {
   4: [["09:00", "10:30", "Video Production"], ["11:00", "12:30", "Esports Skills, Strategies and Analysis"], ["13:00", "14:15", "GCSE Maths"], ["14:30", "15:45", "GCSE Maths"]],
   5: [["09:30", "11:00", "Games Design"], ["11:00", "12:15", "Enterprise & Entrepreneurship in Esports"], ["13:30", "15:00", "Health, Wellbeing and Fitness for Esports Players"]]
 };
-var PREVIEW = { pdf: "pdf", png: "img", jpg: "img", jpeg: "img", gif: "img", webp: "img", txt: "text", md: "text", csv: "text" };
+var PREVIEW = { pdf: "pdf", png: "img", jpg: "img", jpeg: "img", gif: "img", webp: "img", txt: "text", md: "text", csv: "text", docx: "docx" };
 
 if (firebaseConfig.apiKey.indexOf("PASTE") === 0) {
   $("gateMsg").textContent = "Firebase isn't set up yet. Open SETUP.md and fill in firebase-config.js.";
@@ -159,9 +159,10 @@ function render() {
   var live = files.filter(function (f) { return !f.deletedAt; }), binned = files.filter(function (f) { return f.deletedAt; });
   var now = Date.now(), recent = live.filter(function (f) { return now - changedAt(f) < RECENT_DAYS * DAY; });
   var today = londonParts().date, todays = live.filter(function (f) { return f.today === today; });
-  var counts = { all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length };
+  var dups = findDuplicates(live); dupOf = dups.of;
+  var counts = { all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length, dups: dups.list.length };
   live.forEach(function (f) { var k = realFolder(f.folder); counts[k] = (counts[k] || 0) + 1; });
-  var tabs = [["all", "All"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), [["bin", "Bin"]]);
+  var tabs = [["all", "All"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
   if (!tabs.some(function (t) { return t[0] === cur; })) cur = "all";
   var inBin = cur === "bin";
   $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
@@ -174,6 +175,7 @@ function render() {
   var q = $("q").value.trim().toLowerCase(), sort = $("sort").value, list;
   if (inBin) list = binned.slice();
   else if (cur === "today") list = todays.slice();
+  else if (cur === "dups") list = dups.list.slice();
   else if (cur === "recent") list = recent.slice().sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 20);
   else list = live.filter(function (f) { return cur === "all" || realFolder(f.folder) === cur; });
   list = list.filter(function (f) {
@@ -181,20 +183,20 @@ function render() {
     if (!q) return true;
     return (f.name + " " + (f.note || "") + " " + (f.tags || []).join(" ") + " " + (f.rel || "")).toLowerCase().indexOf(q) >= 0;
   });
-  if (cur !== "recent") list.sort(function (a, b) {
+  if (cur !== "recent" && cur !== "dups") list.sort(function (a, b) {
     if (sort === "name") return a.name.localeCompare(b.name);
     if (sort === "size") return (b.size || 0) - (a.size || 0);
     if (sort === "old") return changedAt(a) - changedAt(b);
     return changedAt(b) - changedAt(a);
   });
-  $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : "");
+  $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : cur === "dups" ? " that look like copies of each other, grouped together. Keep one of each and delete the rest." : "");
   $("zipBtn").hidden = inBin || !list.length;
   $("emptyBin").hidden = !inBin || !list.length;
   $("emptyBin").textContent = sure === "empty" ? "Tap again to empty the bin" : "Empty bin";
   $("emptyBin").classList.toggle("sure", sure === "empty");
 
   $("files").innerHTML = list.length ? list.map(function (f) { return inBin ? binRow(f) : fileRow(f); }).join("")
-    : '<div class="none">' + (inBin ? "The bin is empty." : cur === "today" ? "Nothing set aside for today. Tap \u201cFor today\u201d under a file." : live.length ? "No files match." : "No files yet. Drop some above.") + "</div>";
+    : '<div class="none">' + (cur === "dups" ? "No duplicates found." : inBin ? "The bin is empty." : cur === "today" ? "Nothing set aside for today. Tap \u201cFor today\u201d under a file." : live.length ? "No files match." : "No files yet. Drop some above.") + "</div>";
 
   $("folderRows").innerHTML = folders.map(function (f) {
     var ed = editing === "fo:" + f.id, rmOn = sure === "fo:" + f.id;
@@ -216,10 +218,34 @@ function render() {
   if (editing) { var i = $("renameIn"); if (i) { i.focus(); i.select(); } }
 }
 
+/* Duplicates: same content fingerprint (files uploaded from now on), or same size plus the same name or the same
+   date from your computer. Copies are grouped together, newest first in each group. */
+function baseName(n) { return String(n).toLowerCase().replace(/\.[^.]+$/, "").replace(/\s*(\(\d+\)|- copy( \(\d+\))?|copy)$/, "").trim(); }
+function findDuplicates(live) {
+  var parent = {}, find = function (x) { while (parent[x] !== x) x = parent[x] = parent[parent[x]]; return x; };
+  live.forEach(function (f) { parent[f.id] = f.id; });
+  var keys = {};
+  live.forEach(function (f) {
+    var ks = [];
+    if (f.hash) ks.push("h:" + f.hash);
+    if (f.size) { ks.push("n:" + f.size + ":" + baseName(f.name)); if (f.srcModified) ks.push("m:" + f.size + ":" + f.srcModified); }
+    ks.forEach(function (k) { if (keys[k]) parent[find(f.id)] = find(keys[k]); else keys[k] = f.id; });
+  });
+  var groups = {};
+  live.forEach(function (f) { var r = find(f.id); (groups[r] = groups[r] || []).push(f); });
+  var list = [], of = {};
+  Object.keys(groups).forEach(function (r) {
+    var g = groups[r]; if (g.length < 2) return;
+    g.sort(function (a, b) { return changedAt(b) - changedAt(a); });
+    g.forEach(function (f) { of[f.id] = g.length; list.push(f); });
+  });
+  return { list: list, of: of };
+}
+var dupOf = {};
 function fileRow(f) {
   var isEd = editing === f.id, rmOn = sure === "rm:" + f.id, ext = extOf(f.name), vs = f.versions || [], tags = f.tags || [];
   var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder)) + "</span>" +
-    (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
+    (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + (cur === "dups" && dupOf[f.id] ? '<span class="tag Todo">' + dupOf[f.id] + " copies</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
   var more = "";
   if (open[f.id]) {
     more = '<div class="more"><div class="chips">' + TAGS.map(function (t) { return '<button type="button" data-act="tag" data-id="' + esc(f.id) + '" data-tag="' + t + '" aria-pressed="' + (tags.indexOf(t) >= 0) + '">' + t + "</button>"; }).join("") + "</div>" +
@@ -456,6 +482,13 @@ function preview(id) {
   $("modal").hidden = false;
   getBlob(ref(storage, f.path)).then(function (blob) {
     if (previewing !== id) return;
+    if (kind === "docx") return loadScript("lib/mammoth.browser.min.js", "mammoth").then(function (m) { return blob.arrayBuffer().then(function (buf) { return m.convertToHtml({ arrayBuffer: buf }); }); }).then(function (r) {
+      if (previewing !== id) return;
+      var fr = document.createElement("iframe");
+      fr.setAttribute("sandbox", ""); fr.title = f.name;
+      fr.srcdoc = '<!doctype html><meta charset="utf-8"><style>body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#141b24;background:#fff}img{max-width:100%}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 6px}</style>' + (r.value || "<p>This document looks empty.</p>");
+      $("mBody").innerHTML = ""; $("mBody").appendChild(fr);
+    });
     if (kind === "text") return blob.slice(0, 300000).text().then(function (t) { var pre = document.createElement("pre"); pre.textContent = t; $("mBody").innerHTML = ""; $("mBody").appendChild(pre); });
     var typed = new Blob([blob], { type: kind === "pdf" ? "application/pdf" : (blob.type || "image/" + extOf(f.name)) });
     objUrl = URL.createObjectURL(typed);
@@ -465,12 +498,23 @@ function preview(id) {
   });
 }
 
+var scriptLoads = {};
+function loadScript(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  if (!scriptLoads[src]) scriptLoads[src] = new Promise(function (res, rej) {
+    var s = document.createElement("script"); s.src = src;
+    s.onload = function () { res(window[globalName]); }; s.onerror = function () { scriptLoads[src] = null; rej(new Error("couldn't load the viewer")); };
+    document.head.appendChild(s);
+  });
+  return scriptLoads[src];
+}
+
 /* ---------- zip a list ---------- */
 var jszipLoad = null;
 function loadZip() {
   if (window.JSZip) return Promise.resolve(window.JSZip);
   if (!jszipLoad) jszipLoad = new Promise(function (res, rej) {
-    var s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+    var s = document.createElement("script"); s.src = "lib/jszip.min.js";
     s.onload = function () { res(window.JSZip); }; s.onerror = function () { jszipLoad = null; rej(new Error("couldn't load the zip tool")); };
     document.head.appendChild(s);
   });
@@ -621,10 +665,18 @@ function put(path, file, name, row) {
     }, rej, res);
   });
 }
+function fingerprint(file) {
+  try {
+    if (!window.crypto || !crypto.subtle || file.size > 60 * 1048576) return Promise.resolve("");
+    return file.arrayBuffer().then(function (b) { return crypto.subtle.digest("SHA-256", b); }).then(function (h) {
+      return Array.prototype.map.call(new Uint8Array(h), function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+    }).catch(function () { return ""; });
+  } catch (e) { return Promise.resolve(""); }
+}
 function sendNew(file, folder, rel, row) {
-  var id = newId(), path = "users/" + uid + "/files/" + id + "/" + safeName(file.name);
-  return put(path, file, file.name, row).then(function () {
-    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "" });
+  var id = newId(), path = "users/" + uid + "/files/" + id + "/" + safeName(file.name), hash = "";
+  return fingerprint(file).then(function (h) { hash = h; return put(path, file, file.name, row); }).then(function () {
+    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "", hash: hash });
   }).then(function () { if (row) row.remove(); });
 }
 function sendVersion(f, file, row) {
@@ -634,9 +686,10 @@ function sendVersion(f, file, row) {
     $("ups").appendChild(row);
   } else row.querySelector("span").firstChild.textContent = "New version of " + f.name + " ";
   var path = "users/" + uid + "/files/" + f.id + "/v" + Date.now().toString(36) + "/" + safeName(f.name);
-  return put(path, file, f.name, row).then(function () {
+  var hash = "";
+  return fingerprint(file).then(function (h) { hash = h; return put(path, file, f.name, row); }).then(function () {
     var vs = (f.versions || []).concat([{ path: f.path, size: f.size || 0, at: changedAt(f) }]), drop = [];
     while (vs.length > MAX_VERSIONS) drop.push(vs.shift().path);
-    return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs }).then(function () { return deletePaths(drop); });
+    return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs, hash: hash }).then(function () { return deletePaths(drop); });
   }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; });
 }
