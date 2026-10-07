@@ -94,6 +94,7 @@ function start() {
   unsubs.push(onSnapshot(fcol(), function (s) {
     folders = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; }).sort(function (a, b) { return (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(b.name); });
     foldersLoaded = true; maybeTidy();
+    if (!SY.inited) { SY.inited = true; initSync(); } else renderSync();
     liveRender();
   }, function (e) { note("Can't load folders: " + e.message); }));
   unsubs.push(onSnapshot(filecol(), function (s) {
@@ -154,6 +155,17 @@ function lectureNow() {
 function level3Id() { var l = folders.filter(function (f) { return /level\s*3/i.test(f.name); })[0]; return l ? l.id : ""; }
 function curLecture() { return cur.indexOf("lec:") === 0 ? cur.slice(4) : ""; }
 function lecShort(n) { return n === "Health, Wellbeing and Fitness for Esports Players" ? "Health & Wellbeing" : n === "Esports Skills, Strategies and Analysis" ? "Skills & Strategies" : n === "Enterprise & Entrepreneurship in Esports" ? "Enterprise" : n; }
+/* "New since last time": each device remembers when you last looked. Files added or changed after that on
+   another device (or before this device started tagging uploads) get a New tag and their own chip. */
+var DEVICE = "", LAST_SEEN = 0;
+try {
+  DEVICE = localStorage.getItem("gf-device") || ""; if (!DEVICE) { DEVICE = newId(); localStorage.setItem("gf-device", DEVICE); }
+  LAST_SEEN = +localStorage.getItem("gf-lastseen") || 0;
+} catch (e) {}
+function markSeen() { try { localStorage.setItem("gf-lastseen", String(Date.now())); } catch (e) {} }
+document.addEventListener("visibilitychange", function () { if (document.hidden) markSeen(); });
+window.addEventListener("pagehide", markSeen);
+function isNew(f) { return LAST_SEEN && changedAt(f) > LAST_SEEN && f.by !== DEVICE; }
 var autoFile = true;
 try { autoFile = localStorage.getItem("gf-autofile") !== "off"; } catch (e) {}
 function render() {
@@ -163,9 +175,10 @@ function render() {
   var now = Date.now(), recent = live.filter(function (f) { return now - changedAt(f) < RECENT_DAYS * DAY; });
   var today = londonParts().date, todays = live.filter(function (f) { return f.today === today; });
   var dups = findDuplicates(live); dupOf = dups.of;
-  var counts = { all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length, dups: dups.list.length };
+  var news = live.filter(isNew);
+  var counts = { new: news.length, all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length, dups: dups.list.length };
   live.forEach(function (f) { var k = realFolder(f.folder); counts[k] = (counts[k] || 0) + 1; });
-  var tabs = [["all", "All"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
+  var tabs = [["all", "All"], ["new", "New"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
   live.forEach(function (f) { if (f.lecture) counts["lec:" + f.lecture] = (counts["lec:" + f.lecture] || 0) + 1; });
   if (!tabs.some(function (t) { return t[0] === cur; }) && !curLecture()) cur = "all";
   var nowLec = lectureNow(), l3 = level3Id();
@@ -177,7 +190,7 @@ function render() {
   }).join("");
   var inBin = cur === "bin";
   /* Keep the row short: For today, Inbox and Bin only show when they have something in them (or are open). */
-  tabs = tabs.filter(function (t) { return ["today", "inbox", "bin"].indexOf(t[0]) < 0 || counts[t[0]] || cur === t[0]; });
+  tabs = tabs.filter(function (t) { return ["new", "today", "inbox", "bin"].indexOf(t[0]) < 0 || counts[t[0]] || cur === t[0]; });
   $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur || (curLecture() && t[0] === l3)) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
   var tl = targetLecture();
   $("target").textContent = "Uploads go to: " + (realTarget() === "inbox" ? "Inbox" : folderName(realTarget())) + (tl ? ", tagged " + lecShort(tl) + (tl === lectureNow() && !curLecture() ? " (you're in it now)" : "") : "") + ".";
@@ -188,6 +201,7 @@ function render() {
   var q = $("q").value.trim().toLowerCase(), sort = $("sort").value, list;
   if (inBin) list = binned.slice();
   else if (cur === "today") list = todays.slice();
+  else if (cur === "new") list = news.slice();
   else if (cur === "dups") list = dups.list.slice();
   else if (curLecture()) list = live.filter(function (f) { return f.lecture === curLecture(); });
   else if (cur === "recent") list = recent.slice().sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 20);
@@ -203,7 +217,7 @@ function render() {
     if (sort === "old") return changedAt(a) - changedAt(b);
     return changedAt(b) - changedAt(a);
   });
-  $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : cur === "dups" ? " that look like copies of each other, grouped together. Keep one of each and delete the rest." : "");
+  $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : cur === "new" ? " added or changed somewhere else since you last opened Gower Files here" : cur === "dups" ? " that look like copies of each other, grouped together. Keep one of each and delete the rest." : "");
   $("zipBtn").hidden = inBin || !list.length;
   $("emptyBin").hidden = !inBin || !list.length;
   $("sortLec").hidden = !(l3 && cur === l3 && live.some(function (f) { return f.folder === l3 && !f.lecture; }));
@@ -261,7 +275,7 @@ var dupOf = {};
 function fileRow(f) {
   var isEd = editing === f.id, rmOn = sure === "rm:" + f.id, ext = extOf(f.name), vs = f.versions || [], tags = f.tags || [];
   var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder) + (f.lecture ? " \u203a " + lecShort(f.lecture) : "")) + "</span>" +
-    (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + (cur === "dups" && dupOf[f.id] ? '<span class="tag Todo">' + dupOf[f.id] + " copies</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
+    (isNew(f) ? '<span class="tag Submitted">New</span>' : "") + (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + (cur === "dups" && dupOf[f.id] ? '<span class="tag Todo">' + dupOf[f.id] + " copies</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
   var more = "";
   if (open[f.id]) {
     more = '<div class="more"><div class="chips">' + TAGS.map(function (t) { return '<button type="button" data-act="tag" data-id="' + esc(f.id) + '" data-tag="' + t + '" aria-pressed="' + (tags.indexOf(t) >= 0) + '">' + t + "</button>"; }).join("") + "</div>" +
@@ -544,7 +558,9 @@ $("zipBtn").addEventListener("click", function () {
     if (f.deletedAt) return false;
     if (cur === "recent" && now - changedAt(f) >= RECENT_DAYS * DAY) return false;
     if (cur === "today" && f.today !== londonParts().date) return false;
-    if (cur !== "all" && cur !== "recent" && cur !== "today" && realFolder(f.folder) !== cur) return false;
+    if (cur === "new" && !isNew(f)) return false;
+    if (curLecture() && f.lecture !== curLecture()) return false;
+    if (cur !== "all" && cur !== "new" && cur !== "recent" && cur !== "today" && !curLecture() && realFolder(f.folder) !== cur) return false;
     if (tf && (f.tags || []).indexOf(tf) < 0) return false;
     return !q || (f.name + " " + (f.note || "") + " " + (f.tags || []).join(" ") + " " + (f.rel || "")).toLowerCase().indexOf(q) >= 0;
   });
@@ -578,7 +594,7 @@ $("zipBtn").addEventListener("click", function () {
 
 /* ---------- uploads ---------- */
 function realTarget() {
-  if (cur === "all" || cur === "recent" || cur === "today" || cur === "bin" || cur === "dups" || curLecture()) {
+  if (cur === "all" || cur === "new" || cur === "recent" || cur === "today" || cur === "bin" || cur === "dups" || curLecture()) {
     var l3 = folders.filter(function (f) { return /level\s*3/i.test(f.name); })[0];
     return l3 ? l3.id : "inbox";
   }
@@ -718,7 +734,7 @@ function fingerprint(file) {
 function sendNew(file, folder, rel, row, lecture) {
   var id = newId(), path = "users/" + uid + "/files/" + id + "/" + safeName(file.name), hash = "";
   return fingerprint(file).then(function (h) { hash = h; return put(path, file, file.name, row); }).then(function () {
-    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "", hash: hash, lecture: lecture || "" });
+    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "", hash: hash, lecture: lecture || "", by: DEVICE });
   }).then(function () { if (row) row.remove(); });
 }
 function sendVersion(f, file, row) {
@@ -732,8 +748,8 @@ function sendVersion(f, file, row) {
   return fingerprint(file).then(function (h) { hash = h; return put(path, file, f.name, row); }).then(function () {
     var vs = (f.versions || []).concat([{ path: f.path, size: f.size || 0, at: changedAt(f) }]), drop = [];
     while (vs.length > MAX_VERSIONS) drop.push(vs.shift().path);
-    return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs, hash: hash }).then(function () { return deletePaths(drop); });
-  }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; });
+    return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs, hash: hash, by: DEVICE }).then(function () { return deletePaths(drop); });
+  }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; throw er; });
 }
 
 document.addEventListener("change", function (e) {
@@ -841,3 +857,141 @@ function autoSortLectures() {
   }).catch(function (e) { note("Couldn't sort into lectures: " + (e.code || e.message)); });
 }
 $("sortLec").addEventListener("click", function () { sortIntoLectures(true).catch(fail("sort into lectures")); });
+
+/* ---------- auto-save from a folder on this computer ----------
+   Chrome and Edge on a computer can give a web page access to one folder. While this tab is open, Gower Files checks that
+   folder every 30 seconds (and whenever you come back to the tab) and uploads new and changed files. Changed files are saved
+   as a newer version, so nothing is ever overwritten. It never deletes anything, and it only writes to your folder when you
+   press "Update this PC". */
+var SY = { handle: null, timer: null, busy: false, last: 0, sent: 0, newer: [], target: "" };
+function kv(mode, key, val) {
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open("gower-files", 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore("kv"); };
+    r.onerror = function () { rej(r.error); };
+    r.onsuccess = function () {
+      var tx = r.result.transaction("kv", mode === "get" ? "readonly" : "readwrite"), st = tx.objectStore("kv");
+      var q = mode === "get" ? st.get(key) : mode === "del" ? st.delete(key) : st.put(val, key);
+      q.onsuccess = function () { res(q.result); }; q.onerror = function () { rej(q.error); };
+    };
+  });
+}
+function syncStatus(msg) { $("syncStatus").textContent = msg; }
+function renderSync() {
+  if (!$("syncBox")) return;
+  var ok = typeof window.showDirectoryPicker === "function";
+  $("syncBox").hidden = false;
+  if (!ok) { $("syncLink").hidden = true; $("syncResume").hidden = true; $("syncStop").hidden = true; syncStatus("Works in Chrome or Edge on a computer."); return; }
+  $("syncBox").classList.toggle("on", !!SY.timer);
+  $("syncStop").hidden = !SY.handle;
+  $("syncLink").textContent = SY.handle ? "Change folder" : "Link a folder";
+  $("syncNewer").innerHTML = SY.newer.length ? '<div class="hint">' + SY.newer.length + (SY.newer.length === 1 ? " file is" : " files are") + " newer in Gower Files than on this computer (changed somewhere else): " + SY.newer.slice(0, 5).map(function (n) { return esc(n.rel.split("/").pop()); }).join(", ") + (SY.newer.length > 5 ? "..." : "") + '</div><div><button class="btn alt" type="button" id="syncPull">Update this PC</button></div>' : "";
+}
+function startTimer() {
+  clearInterval(SY.timer);
+  SY.timer = setInterval(syncPass, 30000);
+  renderSync(); syncPass();
+}
+function linkFolder() {
+  window.showDirectoryPicker({ id: "gower-files", mode: "read" }).then(function (h) {
+    SY.handle = h; SY.newer = [];
+    return kv("put", "handle", h).catch(function () {}).then(startTimer);
+  }).catch(function (e) { if (e && e.name !== "AbortError") syncStatus("Couldn't link the folder (" + (e.message || e.name) + ")."); });
+}
+function resume() {
+  if (!SY.handle) return;
+  SY.handle.requestPermission({ mode: "read" }).then(function (p) {
+    if (p === "granted") { $("syncResume").hidden = true; startTimer(); } else syncStatus("Allow access to keep auto-saving.");
+  }).catch(function () { syncStatus("Allow access to keep auto-saving."); });
+}
+function stopSync() {
+  clearInterval(SY.timer); SY.timer = null; SY.handle = null; SY.newer = [];
+  kv("del", "handle").catch(function () {});
+  $("syncResume").hidden = true; syncStatus("Auto-save is off."); renderSync();
+}
+function walkDir(dir, prefix, out) {
+  var it = dir.values(), step = function () {
+    return it.next().then(function (r) {
+      if (r.done) return out;
+      var h = r.value, p = prefix + "/" + h.name;
+      if (h.kind === "directory") return walkDir(h, p, out).then(step);
+      if (!JUNK.test(h.name)) out.push({ rel: p, fh: h });
+      return step();
+    });
+  };
+  return step();
+}
+function syncPass() {
+  if (!SY.handle || SY.busy || !uid) return;
+  SY.busy = true;
+  var root = SY.handle.name, mapKey = "map:" + root, map = {}, sent = 0;
+  SY.handle.queryPermission({ mode: "read" }).then(function (p) {
+    if (p !== "granted") { clearInterval(SY.timer); SY.timer = null; $("syncResume").hidden = false; syncStatus("Paused. Press Resume to carry on auto-saving " + root + "."); throw "stop"; }
+    syncStatus("Checking " + root + "...");
+    return kv("get", mapKey).catch(function () { return null; });
+  }).then(function (m) {
+    map = m || {};
+    return walkDir(SY.handle, root, []);
+  }).then(function (entries) {
+    var byRel = {}; files.forEach(function (f) { if (!f.deletedAt && f.rel) byRel[f.rel] = f; });
+    var newer = [], chain = Promise.resolve();
+    entries.forEach(function (en) {
+      chain = chain.then(function () { return en.fh.getFile(); }).then(function (file) {
+        var rec = byRel[en.rel], seen = map[en.rel];
+        if (file.size > 100 * 1048576) return;
+        if (!rec) { sent++; return folderFor(en.rel).then(function (dest) { return sendNew(file, dest.folder, en.rel, null, dest.lecture); }).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        var src = rec.srcModified || 0;
+        /* Changed here since the last check (or, the first time, newer here than in Gower Files): upload it as a new version. */
+        var localChanged = seen ? file.lastModified !== seen.lm : (file.lastModified > src || (file.lastModified === src && file.size !== rec.size));
+        if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        map[en.rel] = { lm: file.lastModified };
+        if (src > file.lastModified) newer.push({ rel: en.rel, fh: en.fh, rec: rec });
+      }, function () { /* open in Word or unreadable right now: try again next time */ });
+    });
+    return chain.then(function () { SY.newer = newer; });
+  }).then(function () {
+    SY.last = Date.now(); SY.sent += sent;
+    return kv("put", mapKey, map).catch(function () {});
+  }).then(function () {
+    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : ""));
+  }, function (e) { if (e !== "stop") syncStatus("Auto-save hit a problem (" + ((e && (e.code || e.message)) || e) + "). It will try again."); })
+    .then(function () { SY.busy = false; renderSync(); });
+}
+function pullNewer() {
+  if (!SY.handle || !SY.newer.length) return;
+  var list = SY.newer.slice(), root = SY.handle.name, mapKey = "map:" + root, done = 0;
+  SY.handle.requestPermission({ mode: "readwrite" }).then(function (p) {
+    if (p !== "granted") throw new Error("not allowed to write to the folder");
+    return kv("get", mapKey).catch(function () { return null; });
+  }).then(function (m) {
+    var map = m || {}, chain = Promise.resolve();
+    list.forEach(function (n) {
+      chain = chain.then(function () { return getBlob(ref(storage, n.rec.path)); }).then(function (blob) {
+        return n.fh.createWritable().then(function (w) { return w.write(blob).then(function () { return w.close(); }); });
+      }).then(function () { return n.fh.getFile(); }).then(function (f) { map[n.rel] = { lm: f.lastModified }; done++; }, function () {});
+    });
+    return chain.then(function () { return kv("put", mapKey, map).catch(function () {}); });
+  }).then(function () {
+    SY.newer = []; syncStatus("Updated " + done + (done === 1 ? " file" : " files") + " on this computer" + (done < list.length ? " (close any open in Word and try again for the rest)" : "") + ".");
+    renderSync();
+  }).catch(function (e) { syncStatus("Couldn't update this PC (" + (e.code || e.message) + ")."); });
+}
+$("syncLink").addEventListener("click", linkFolder);
+$("syncResume").addEventListener("click", resume);
+$("syncStop").addEventListener("click", stopSync);
+document.addEventListener("click", function (e) { if (e.target && e.target.id === "syncPull") pullNewer(); });
+document.addEventListener("visibilitychange", function () { if (!document.hidden && SY.timer) syncPass(); });
+window.addEventListener("focus", function () { if (SY.timer) syncPass(); });
+/* Pick up a folder linked on an earlier visit. Chrome asks again for permission each visit, so show Resume. */
+function initSync() {
+  renderSync();
+  if (typeof window.showDirectoryPicker !== "function") return;
+  kv("get", "handle").then(function (h) {
+    if (!h) { syncStatus("Link your college or home folder and changes upload by themselves while this tab is open."); return; }
+    SY.handle = h;
+    return h.queryPermission({ mode: "read" }).then(function (p) {
+      if (p === "granted") startTimer();
+      else { $("syncResume").hidden = false; syncStatus("Linked to " + h.name + ". Press Resume to start auto-saving."); renderSync(); }
+    });
+  }).catch(function () {});
+}
