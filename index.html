@@ -81,7 +81,7 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
 .meter span.hi { background: var(--warn); }
 .sharebox { display: flex; flex-direction: column; gap: 6px; }
 .lecchips { align-items: center; }
-.lecchips button { border-style: dashed; }
+.lecchips button { border-style: solid; }
 .lecchips button.nowlec { border-color: #2fa36b; border-style: solid; }
 .notice { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: .86rem; }
 .notice.err { color: var(--warn); }
@@ -146,8 +146,8 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
   <select id="bulkTo" aria-label="Move to folder"></select>
   <button class="btn" id="bulkMove" type="button">Move</button>
   <button class="btn alt" id="bulkBin" type="button">Bin</button>
-  <select id="bulkLecTo" aria-label="Set lecture"></select>
-  <button class="btn alt" id="bulkLec" type="button">Set lecture</button>
+  <select id="bulkLecTo" aria-label="Put in a lecture folder"></select>
+  <button class="btn alt" id="bulkLec" type="button">Put in lecture</button>
   <button class="btn alt" id="bulkClear" type="button">Clear</button>
 </div>
 

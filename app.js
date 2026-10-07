@@ -151,6 +151,7 @@ function lectureNow() {
   list.forEach(function (l) { if (n.min >= hm(l[0]) && n.min < hm(l[1]) + 15) hit = l; });
   return hit ? hit[2] : null;
 }
+function level3Id() { var l = folders.filter(function (f) { return /level\s*3/i.test(f.name); })[0]; return l ? l.id : ""; }
 function curLecture() { return cur.indexOf("lec:") === 0 ? cur.slice(4) : ""; }
 function lecShort(n) { return n === "Health, Wellbeing and Fitness for Esports Players" ? "Health & Wellbeing" : n === "Esports Skills, Strategies and Analysis" ? "Skills & Strategies" : n === "Enterprise & Entrepreneurship in Esports" ? "Enterprise" : n; }
 var autoFile = true;
@@ -167,12 +168,15 @@ function render() {
   var tabs = [["all", "All"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
   live.forEach(function (f) { if (f.lecture) counts["lec:" + f.lecture] = (counts["lec:" + f.lecture] || 0) + 1; });
   if (!tabs.some(function (t) { return t[0] === cur; }) && !curLecture()) cur = "all";
-  var nowLec = lectureNow();
-  $("lecChips").innerHTML = '<span class="hint">Lectures:</span>' + LECTURE_NAMES.map(function (n) {
-    return '<button type="button" data-act="cur" data-id="' + esc("lec:" + n) + '" aria-pressed="' + (cur === "lec:" + n) + '"' + (n === nowLec ? ' class="nowlec"' : "") + ">" + esc(lecShort(n)) + " (" + (counts["lec:" + n] || 0) + ")</button>";
+  var nowLec = lectureNow(), l3 = level3Id();
+  /* Lecture folders live inside Level 3: they show when Level 3 or one of its lectures is open. */
+  var inL3 = !!curLecture() || (l3 && cur === l3);
+  $("lecChips").hidden = !inL3;
+  $("lecChips").innerHTML = '<span class="hint">Level 3 \u203a</span>' + LECTURE_NAMES.map(function (n) {
+    return '<button type="button" data-act="cur" data-id="' + esc("lec:" + n) + '" aria-pressed="' + (cur === "lec:" + n) + '"' + (n === nowLec ? ' class="nowlec" title="You\'re in this lecture now"' : "") + ">\u{1F4C1} " + esc(lecShort(n)) + " (" + (counts["lec:" + n] || 0) + ")</button>";
   }).join("");
   var inBin = cur === "bin";
-  $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
+  $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur || (curLecture() && t[0] === l3)) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
   var tl = targetLecture();
   $("target").textContent = "Uploads go to: " + (realTarget() === "inbox" ? "Inbox" : folderName(realTarget())) + (tl ? ", tagged " + lecShort(tl) + (tl === lectureNow() && !curLecture() ? " (you're in it now)" : "") : "") + ".";
 
@@ -219,7 +223,7 @@ function render() {
   var keep = $("bulkTo").value;
   $("bulkTo").innerHTML = '<option value="inbox">Inbox</option>' + folders.map(function (f) { return '<option value="' + esc(f.id) + '">' + esc(f.name) + "</option>"; }).join("");
   if (keep) $("bulkTo").value = keep;
-  if (!$("bulkLecTo").options.length) $("bulkLecTo").innerHTML = '<option value="-">No lecture</option>' + LECTURE_NAMES.map(function (n) { return '<option value="' + esc(n) + '">' + esc(lecShort(n)) + "</option>"; }).join("");
+  if (!$("bulkLecTo").options.length) $("bulkLecTo").innerHTML = '<option value="-">No lecture folder</option>' + LECTURE_NAMES.map(function (n) { return '<option value="' + esc(n) + '">Level 3 \u203a ' + esc(lecShort(n)) + "</option>"; }).join("");
   var total = 0; files.forEach(function (f) { total += f.size || 0; (f.versions || []).forEach(function (v) { total += v.size || 0; }); });
   var pc = Math.min(100, total / FREE_BYTES * 100);
   $("usage").innerHTML = '<div class="meter"><span style="width:' + pc.toFixed(1) + '%"' + (pc > 80 ? ' class="hi"' : "") + '></span></div>' + esc(live.length + " files · " + fmtSize(total) + " of the 5 GB free allowance used (" + (pc < 1 && total ? "under 1" : Math.round(pc)) + "%), including older versions and the bin");
@@ -253,7 +257,7 @@ function findDuplicates(live) {
 var dupOf = {};
 function fileRow(f) {
   var isEd = editing === f.id, rmOn = sure === "rm:" + f.id, ext = extOf(f.name), vs = f.versions || [], tags = f.tags || [];
-  var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder)) + "</span>" + (f.lecture ? "<span>" + esc(lecShort(f.lecture)) + "</span>" : "") +
+  var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder) + (f.lecture ? " \u203a " + lecShort(f.lecture) : "")) + "</span>" +
     (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + (cur === "dups" && dupOf[f.id] ? '<span class="tag Todo">' + dupOf[f.id] + " copies</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
   var more = "";
   if (open[f.id]) {
@@ -716,7 +720,8 @@ document.addEventListener("change", function (e) {
 });
 $("bulkLec").addEventListener("click", function () {
   var v = $("bulkLecTo").value, b = writeBatch(db);
-  Object.keys(sel).forEach(function (k) { b.update(doc(filecol(), k), { lecture: v === "-" ? "" : v }); });
+  var l3 = level3Id();
+  Object.keys(sel).forEach(function (k) { var up = { lecture: v === "-" ? "" : v }; if (v !== "-" && l3) up.folder = l3; b.update(doc(filecol(), k), up); });
   sel = {};
   b.commit().catch(fail("set the lecture"));
 });
