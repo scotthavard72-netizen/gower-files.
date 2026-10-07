@@ -80,6 +80,9 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
 .meter span { display: block; height: 100%; background: var(--accent); }
 .meter span.hi { background: var(--warn); }
 .sharebox { display: flex; flex-direction: column; gap: 6px; }
+.lecchips { align-items: center; }
+.lecchips button { border-style: dashed; }
+.lecchips button.nowlec { border-color: #2fa36b; border-style: solid; }
 .notice { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: .86rem; }
 .notice.err { color: var(--warn); }
 </style>
@@ -113,6 +116,7 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
   <div class="list" id="ups"></div>
 
   <div class="chips" id="chips"></div>
+  <div class="chips lecchips" id="lecChips"></div>
   <div class="tools">
     <input type="text" id="q" placeholder="Search names, tags and notes" aria-label="Search files">
     <select id="tagF" aria-label="Filter by tag"><option value="">Any tag</option></select>
@@ -131,7 +135,7 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
         <button class="btn" type="submit">Add</button>
       </form>
       <div class="hint">Deleting a folder moves its files to Inbox. It never deletes files.</div>
-      <label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="autoFile"> During a lecture, uploads go into that lecture's folder (on All, For today and Recent)</label>
+      <label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="autoFile"> During a lecture, tag uploads with that lecture automatically</label>
     </div>
   </details>
   <div class="hint" id="usage"></div>
@@ -142,6 +146,8 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
   <select id="bulkTo" aria-label="Move to folder"></select>
   <button class="btn" id="bulkMove" type="button">Move</button>
   <button class="btn alt" id="bulkBin" type="button">Bin</button>
+  <select id="bulkLecTo" aria-label="Set lecture"></select>
+  <button class="btn alt" id="bulkLec" type="button">Set lecture</button>
   <button class="btn alt" id="bulkClear" type="button">Clear</button>
 </div>
 

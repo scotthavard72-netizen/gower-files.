@@ -19,6 +19,7 @@ var LECTURES = {
   4: [["09:00", "10:30", "Video Production"], ["11:00", "12:30", "Esports Skills, Strategies and Analysis"], ["13:00", "14:15", "GCSE Maths"], ["14:30", "15:45", "GCSE Maths"]],
   5: [["09:30", "11:00", "Games Design"], ["11:00", "12:15", "Enterprise & Entrepreneurship in Esports"], ["13:30", "15:00", "Health, Wellbeing and Fitness for Esports Players"]]
 };
+var LECTURE_NAMES = ["Esports Skills, Strategies and Analysis", "ASBW", "Introduction to Esports", "Enterprise & Entrepreneurship in Esports", "Esports Coaching", "Video Production", "Games Design", "Health, Wellbeing and Fitness for Esports Players", "GCSE Maths"];
 var PREVIEW = { pdf: "pdf", png: "img", jpg: "img", jpeg: "img", gif: "img", webp: "img", txt: "text", md: "text", csv: "text", docx: "docx" };
 
 if (firebaseConfig.apiKey.indexOf("PASTE") === 0) {
@@ -131,10 +132,11 @@ function applyUrl() {
   if (urlApplied || !folders.length) return;
   urlApplied = true;
   try {
-    var p = new URLSearchParams(location.search), fo = p.get("folder"), q = p.get("q");
+    var p = new URLSearchParams(location.search), fo = p.get("folder"), q = p.get("q"), lec = p.get("lecture");
+    if (lec) { var ln = LECTURE_NAMES.filter(function (n) { return n.toLowerCase() === lec.toLowerCase(); })[0]; if (ln) cur = "lec:" + ln; }
     if (fo) { var m = folders.filter(function (f) { return String(f.name).toLowerCase() === fo.toLowerCase(); })[0]; if (m) cur = m.id; }
     if (q) $("q").value = q;
-    if (fo || q) history.replaceState(null, "", location.pathname);
+    if (fo || q || lec) history.replaceState(null, "", location.pathname);
   } catch (e) {}
 }
 function londonParts() {
@@ -147,10 +149,10 @@ function lectureNow() {
   if (!autoFile) return null;
   var n = londonParts(), list = LECTURES[n.dow] || [], hit = null;
   list.forEach(function (l) { if (n.min >= hm(l[0]) && n.min < hm(l[1]) + 15) hit = l; });
-  if (!hit) return null;
-  var f = folders.filter(function (x) { return String(x.name).toLowerCase() === hit[2].toLowerCase(); })[0];
-  return f ? { id: f.id, name: f.name } : null;
+  return hit ? hit[2] : null;
 }
+function curLecture() { return cur.indexOf("lec:") === 0 ? cur.slice(4) : ""; }
+function lecShort(n) { return n === "Health, Wellbeing and Fitness for Esports Players" ? "Health & Wellbeing" : n === "Esports Skills, Strategies and Analysis" ? "Skills & Strategies" : n === "Enterprise & Entrepreneurship in Esports" ? "Enterprise" : n; }
 var autoFile = true;
 try { autoFile = localStorage.getItem("gf-autofile") !== "off"; } catch (e) {}
 function render() {
@@ -163,11 +165,16 @@ function render() {
   var counts = { all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length, dups: dups.list.length };
   live.forEach(function (f) { var k = realFolder(f.folder); counts[k] = (counts[k] || 0) + 1; });
   var tabs = [["all", "All"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
-  if (!tabs.some(function (t) { return t[0] === cur; })) cur = "all";
+  live.forEach(function (f) { if (f.lecture) counts["lec:" + f.lecture] = (counts["lec:" + f.lecture] || 0) + 1; });
+  if (!tabs.some(function (t) { return t[0] === cur; }) && !curLecture()) cur = "all";
+  var nowLec = lectureNow();
+  $("lecChips").innerHTML = '<span class="hint">Lectures:</span>' + LECTURE_NAMES.map(function (n) {
+    return '<button type="button" data-act="cur" data-id="' + esc("lec:" + n) + '" aria-pressed="' + (cur === "lec:" + n) + '"' + (n === nowLec ? ' class="nowlec"' : "") + ">" + esc(lecShort(n)) + " (" + (counts["lec:" + n] || 0) + ")</button>";
+  }).join("");
   var inBin = cur === "bin";
   $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
-  var ln = (cur === "all" || cur === "recent" || cur === "today") ? lectureNow() : null;
-  $("target").textContent = "Uploads go to: " + (realTarget() === "inbox" ? "Inbox" : folderName(realTarget())) + (ln ? " (you're in that lecture now)" : "") + ". A whole folder keeps its own subfolders as folders here.";
+  var tl = targetLecture();
+  $("target").textContent = "Uploads go to: " + (realTarget() === "inbox" ? "Inbox" : folderName(realTarget())) + (tl ? ", tagged " + lecShort(tl) + (tl === lectureNow() && !curLecture() ? " (you're in it now)" : "") : "") + ".";
 
   var tf = $("tagF").value;
   $("tagF").innerHTML = '<option value="">Any tag</option>' + TAGS.map(function (t) { return '<option' + (t === tf ? " selected" : "") + ">" + t + "</option>"; }).join("");
@@ -176,6 +183,7 @@ function render() {
   if (inBin) list = binned.slice();
   else if (cur === "today") list = todays.slice();
   else if (cur === "dups") list = dups.list.slice();
+  else if (curLecture()) list = live.filter(function (f) { return f.lecture === curLecture(); });
   else if (cur === "recent") list = recent.slice().sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 20);
   else list = live.filter(function (f) { return cur === "all" || realFolder(f.folder) === cur; });
   list = list.filter(function (f) {
@@ -211,6 +219,7 @@ function render() {
   var keep = $("bulkTo").value;
   $("bulkTo").innerHTML = '<option value="inbox">Inbox</option>' + folders.map(function (f) { return '<option value="' + esc(f.id) + '">' + esc(f.name) + "</option>"; }).join("");
   if (keep) $("bulkTo").value = keep;
+  if (!$("bulkLecTo").options.length) $("bulkLecTo").innerHTML = '<option value="-">No lecture</option>' + LECTURE_NAMES.map(function (n) { return '<option value="' + esc(n) + '">' + esc(lecShort(n)) + "</option>"; }).join("");
   var total = 0; files.forEach(function (f) { total += f.size || 0; (f.versions || []).forEach(function (v) { total += v.size || 0; }); });
   var pc = Math.min(100, total / FREE_BYTES * 100);
   $("usage").innerHTML = '<div class="meter"><span style="width:' + pc.toFixed(1) + '%"' + (pc > 80 ? ' class="hi"' : "") + '></span></div>' + esc(live.length + " files · " + fmtSize(total) + " of the 5 GB free allowance used (" + (pc < 1 && total ? "under 1" : Math.round(pc)) + "%), including older versions and the bin");
@@ -244,11 +253,12 @@ function findDuplicates(live) {
 var dupOf = {};
 function fileRow(f) {
   var isEd = editing === f.id, rmOn = sure === "rm:" + f.id, ext = extOf(f.name), vs = f.versions || [], tags = f.tags || [];
-  var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder)) + "</span>" +
+  var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder)) + "</span>" + (f.lecture ? "<span>" + esc(lecShort(f.lecture)) + "</span>" : "") +
     (vs.length ? "<span>" + (vs.length + 1) + " versions</span>" : "") + (cur === "dups" && dupOf[f.id] ? '<span class="tag Todo">' + dupOf[f.id] + " copies</span>" : "") + tags.map(function (t) { return '<span class="tag ' + t + '">' + t + "</span>"; }).join("");
   var more = "";
   if (open[f.id]) {
     more = '<div class="more"><div class="chips">' + TAGS.map(function (t) { return '<button type="button" data-act="tag" data-id="' + esc(f.id) + '" data-tag="' + t + '" aria-pressed="' + (tags.indexOf(t) >= 0) + '">' + t + "</button>"; }).join("") + "</div>" +
+      '<label class="hint" style="display:flex;gap:6px;align-items:center">Lecture <select data-act="setLec" data-id="' + esc(f.id) + '" style="width:auto"><option value="">None</option>' + LECTURE_NAMES.map(function (n) { return "<option" + (f.lecture === n ? " selected" : "") + ' value="' + esc(n) + '">' + esc(lecShort(n)) + "</option>"; }).join("") + "</select></label>" +
       '<form class="inline" data-act="noteForm" data-id="' + esc(f.id) + '"><input type="text" maxlength="200" placeholder="Add a note, e.g. needs references" value="' + esc(f.note || "") + '" aria-label="Note"><button class="btn alt" type="submit">Save note</button></form>' +
       '<div><button class="link" type="button" data-act="replace" data-id="' + esc(f.id) + '">Upload a newer version</button> <button class="link" type="button" data-act="share" data-id="' + esc(f.id) + '">Make a share link (' + SHARE_HOURS + ' hours)</button></div>' +
       (shareOut[f.id] ? '<div class="sharebox">' + shareOut[f.id] + "</div>" : "") +
@@ -561,8 +571,14 @@ $("zipBtn").addEventListener("click", function () {
 
 /* ---------- uploads ---------- */
 function realTarget() {
-  if (cur === "all" || cur === "recent" || cur === "today" || cur === "bin") { var l = lectureNow(); return l ? l.id : "inbox"; }
+  if (cur === "all" || cur === "recent" || cur === "today" || cur === "bin" || cur === "dups" || curLecture()) {
+    var l3 = folders.filter(function (f) { return /level\s*3/i.test(f.name); })[0];
+    return l3 ? l3.id : "inbox";
+  }
   return cur;
+}
+/* The lecture new uploads are tagged with: the lecture you're looking at, or the one you're in right now. */
+function targetLecture() { return curLecture() || lectureNow() || "";
 }
 $("autoFile").addEventListener("change", function (e) { autoFile = e.target.checked; try { localStorage.setItem("gf-autofile", autoFile ? "on" : "off"); } catch (er) {} render(); });
 var folderMade = {};
@@ -633,7 +649,7 @@ function queue(items) {
     var row = document.createElement("div"); row.className = "up";
     row.innerHTML = "<span>" + esc(it.rel || it.file.name) + ' <span class="pc">waiting</span></span><div class="bar"><span></span></div>';
     $("ups").appendChild(row);
-    it.row = row; it.target = realTarget();
+    it.row = row; it.target = realTarget(); it.lecture = targetLecture();
     waiting.push(it);
   });
   if (skipped) note(skipped + " temporary or system file" + (skipped === 1 ? " was" : "s were") + " skipped.");
@@ -650,7 +666,7 @@ function pump() {
           setTimeout(function () { it.row.remove(); }, 2500);
           return;
         }
-        return existing ? sendVersion(existing, it.file, it.row) : sendNew(it.file, folder, it.rel, it.row);
+        return existing ? sendVersion(existing, it.file, it.row) : sendNew(it.file, folder, it.rel, it.row, it.lecture);
       }).catch(function (er) { it.row.classList.add("err"); it.row.textContent = it.file.name + ": " + (er.code || er.message); })
         .then(function () { running--; pump(); });
     })(waiting.shift());
@@ -673,10 +689,10 @@ function fingerprint(file) {
     }).catch(function () { return ""; });
   } catch (e) { return Promise.resolve(""); }
 }
-function sendNew(file, folder, rel, row) {
+function sendNew(file, folder, rel, row, lecture) {
   var id = newId(), path = "users/" + uid + "/files/" + id + "/" + safeName(file.name), hash = "";
   return fingerprint(file).then(function (h) { hash = h; return put(path, file, file.name, row); }).then(function () {
-    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "", hash: hash });
+    return setDoc(doc(filecol(), id), { name: file.name, folder: folder, size: file.size, type: file.type || "", path: path, createdAt: Date.now(), srcModified: file.lastModified || 0, rel: rel || "", tags: [], note: "", hash: hash, lecture: lecture || "" });
   }).then(function () { if (row) row.remove(); });
 }
 function sendVersion(f, file, row) {
@@ -693,3 +709,14 @@ function sendVersion(f, file, row) {
     return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs, hash: hash }).then(function () { return deletePaths(drop); });
   }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; });
 }
+
+document.addEventListener("change", function (e) {
+  var s = e.target;
+  if (s && s.getAttribute && s.getAttribute("data-act") === "setLec") updateDoc(doc(filecol(), s.getAttribute("data-id")), { lecture: s.value }).catch(fail("set the lecture"));
+});
+$("bulkLec").addEventListener("click", function () {
+  var v = $("bulkLecTo").value, b = writeBatch(db);
+  Object.keys(sel).forEach(function (k) { b.update(doc(filecol(), k), { lecture: v === "-" ? "" : v }); });
+  sel = {};
+  b.commit().catch(fail("set the lecture"));
+});
