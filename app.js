@@ -93,6 +93,7 @@ function start() {
   unsubs.push(onSnapshot(fcol(), function (s) {
     folders = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; }).sort(function (a, b) { return (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(b.name); });
     foldersLoaded = true; maybeTidy();
+    if (!SY.inited) { SY.inited = true; initSync(); } else renderSync();
     liveRender();
   }, function (e) { note("Can't load folders: " + e.message); }));
   unsubs.push(onSnapshot(filecol(), function (s) {
@@ -192,6 +193,7 @@ function render() {
   $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : cur === "dups" ? " that look like copies of each other, grouped together. Keep one of each and delete the rest." : "");
   $("zipBtn").hidden = inBin || !list.length;
   $("emptyBin").hidden = !inBin || !list.length;
+  $("binDups").hidden = cur !== "dups" || !list.length;
   $("emptyBin").textContent = sure === "empty" ? "Tap again to empty the bin" : "Empty bin";
   $("emptyBin").classList.toggle("sure", sure === "empty");
 
@@ -242,6 +244,24 @@ function findDuplicates(live) {
   return { list: list, of: of };
 }
 var dupOf = {};
+/* Keep the newest file in each group of copies and move the rest to the Bin (restorable for 30 days). */
+function binSpareCopies() {
+  var live = files.filter(function (f) { return !f.deletedAt; }), d = findDuplicates(live), b = writeBatch(db), n = 0, t = Date.now(), left = 0;
+  /* d.list holds each group together, newest first: the first file of each group is kept. */
+  d.list.forEach(function (f) {
+    if (left === 0) { left = d.of[f.id] - 1; return; }
+    left--; b.update(doc(filecol(), f.id), { deletedAt: t }); n++;
+  });
+  if (!n) return Promise.resolve(0);
+  return b.commit().then(function () { return n; });
+}
+function autoBinDups() {
+  var flag = doc(db, "users", uid, "meta", "dups1");
+  return getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    return binSpareCopies().then(function (n) { if (n) note(n + (n === 1 ? " duplicate copy was" : " duplicate copies were") + " moved to the Bin. The newest of each was kept."); return setDoc(flag, { at: Date.now(), binned: n }); });
+  }).catch(function (e) { note("Couldn't clear duplicates: " + (e.code || e.message)); });
+}
 function fileRow(f) {
   var isEd = editing === f.id, rmOn = sure === "rm:" + f.id, ext = extOf(f.name), vs = f.versions || [], tags = f.tags || [];
   var meta = "<span>" + fmtSize(f.size || 0) + "</span><span>" + (f.updatedAt ? "Updated " : "") + fmtDate(changedAt(f)) + "</span><span>" + esc(folderName(f.folder)) + "</span>" +
@@ -305,7 +325,7 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(function () { setTimeout(autoBinDups, 1500); }); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
    otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
@@ -691,5 +711,151 @@ function sendVersion(f, file, row) {
     var vs = (f.versions || []).concat([{ path: f.path, size: f.size || 0, at: changedAt(f) }]), drop = [];
     while (vs.length > MAX_VERSIONS) drop.push(vs.shift().path);
     return updateDoc(doc(filecol(), f.id), { path: path, size: file.size, updatedAt: Date.now(), srcModified: file.lastModified || 0, versions: vs, hash: hash }).then(function () { return deletePaths(drop); });
-  }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; });
+  }).then(function () { row.remove(); }, function (er) { row.classList.add("err"); row.textContent = f.name + ": upload failed (" + (er.code || er.message) + ")"; throw er; });
 }
+
+/* ---------- auto-save from a folder on this computer ----------
+   Chrome and Edge on a computer can give a web page access to one folder. While this tab is open, Gower Files checks that
+   folder every 30 seconds (and whenever you come back to the tab) and uploads new and changed files. Changed files are saved
+   as a newer version, so nothing is ever overwritten. It never deletes anything, and it only writes to your folder when you
+   press "Update this PC". */
+var SY = { handle: null, timer: null, busy: false, last: 0, sent: 0, newer: [], target: "" };
+function kv(mode, key, val) {
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open("gower-files", 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore("kv"); };
+    r.onerror = function () { rej(r.error); };
+    r.onsuccess = function () {
+      var tx = r.result.transaction("kv", mode === "get" ? "readonly" : "readwrite"), st = tx.objectStore("kv");
+      var q = mode === "get" ? st.get(key) : mode === "del" ? st.delete(key) : st.put(val, key);
+      q.onsuccess = function () { res(q.result); }; q.onerror = function () { rej(q.error); };
+    };
+  });
+}
+function syncStatus(msg) { $("syncStatus").textContent = msg; }
+function renderSync() {
+  if (!$("syncBox")) return;
+  var ok = typeof window.showDirectoryPicker === "function";
+  $("syncBox").hidden = false;
+  if (!ok) { $("syncLink").hidden = true; $("syncResume").hidden = true; $("syncStop").hidden = true; $("syncTarget").parentNode.hidden = true; syncStatus("Works in Chrome or Edge on a computer."); return; }
+  var opts = '<option value="inbox">Inbox</option>' + folders.map(function (f) { return '<option value="' + esc(f.id) + '">' + esc(f.name) + "</option>"; }).join("");
+  var keep = SY.target || $("syncTarget").value;
+  if ($("syncTarget").innerHTML !== opts) $("syncTarget").innerHTML = opts;
+  if (!keep) { var l3 = folders.filter(function (f) { return /level\s*3/i.test(f.name); })[0]; keep = l3 ? l3.id : "inbox"; }
+  $("syncTarget").value = keep; SY.target = $("syncTarget").value;
+  $("syncBox").classList.toggle("on", !!SY.timer);
+  $("syncStop").hidden = !SY.handle;
+  $("syncLink").textContent = SY.handle ? "Change folder" : "Link a folder";
+  $("syncNewer").innerHTML = SY.newer.length ? '<div class="hint">' + SY.newer.length + (SY.newer.length === 1 ? " file is" : " files are") + " newer in Gower Files than on this computer (changed somewhere else): " + SY.newer.slice(0, 5).map(function (n) { return esc(n.rel.split("/").pop()); }).join(", ") + (SY.newer.length > 5 ? "..." : "") + '</div><div><button class="btn alt" type="button" id="syncPull">Update this PC</button></div>' : "";
+}
+function startTimer() {
+  clearInterval(SY.timer);
+  SY.timer = setInterval(syncPass, 30000);
+  renderSync(); syncPass();
+}
+function linkFolder() {
+  window.showDirectoryPicker({ id: "gower-files", mode: "read" }).then(function (h) {
+    SY.handle = h; SY.newer = [];
+    return kv("put", "handle", h).catch(function () {}).then(startTimer);
+  }).catch(function (e) { if (e && e.name !== "AbortError") syncStatus("Couldn't link the folder (" + (e.message || e.name) + ")."); });
+}
+function resume() {
+  if (!SY.handle) return;
+  SY.handle.requestPermission({ mode: "read" }).then(function (p) {
+    if (p === "granted") { $("syncResume").hidden = true; startTimer(); } else syncStatus("Allow access to keep auto-saving.");
+  }).catch(function () { syncStatus("Allow access to keep auto-saving."); });
+}
+function stopSync() {
+  clearInterval(SY.timer); SY.timer = null; SY.handle = null; SY.newer = [];
+  kv("del", "handle").catch(function () {});
+  $("syncResume").hidden = true; syncStatus("Auto-save is off."); renderSync();
+}
+function walkDir(dir, prefix, out) {
+  var it = dir.values(), step = function () {
+    return it.next().then(function (r) {
+      if (r.done) return out;
+      var h = r.value, p = prefix + "/" + h.name;
+      if (h.kind === "directory") return walkDir(h, p, out).then(step);
+      if (!JUNK.test(h.name)) out.push({ rel: p, fh: h });
+      return step();
+    });
+  };
+  return step();
+}
+function syncPass() {
+  if (!SY.handle || SY.busy || !uid) return;
+  SY.busy = true;
+  var root = SY.handle.name, mapKey = "map:" + root, map = {}, sent = 0;
+  SY.handle.queryPermission({ mode: "read" }).then(function (p) {
+    if (p !== "granted") { clearInterval(SY.timer); SY.timer = null; $("syncResume").hidden = false; syncStatus("Paused. Press Resume to carry on auto-saving " + root + "."); throw "stop"; }
+    syncStatus("Checking " + root + "...");
+    return kv("get", mapKey).catch(function () { return null; });
+  }).then(function (m) {
+    map = m || {};
+    return walkDir(SY.handle, root, []);
+  }).then(function (entries) {
+    var byRel = {}; files.forEach(function (f) { if (!f.deletedAt && f.rel) byRel[f.rel] = f; });
+    var newer = [], chain = Promise.resolve();
+    entries.forEach(function (en) {
+      chain = chain.then(function () { return en.fh.getFile(); }).then(function (file) {
+        var rec = byRel[en.rel], seen = map[en.rel];
+        if (file.size > 100 * 1048576) return;
+        if (!rec) { sent++; return sendNew(file, realFolder(SY.target), en.rel, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        var src = rec.srcModified || 0;
+        /* Changed here since the last check (or, the first time, newer here than in Gower Files): upload it as a new version. */
+        var localChanged = seen ? file.lastModified !== seen.lm : (file.lastModified > src || (file.lastModified === src && file.size !== rec.size));
+        if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        map[en.rel] = { lm: file.lastModified };
+        if (src > file.lastModified) newer.push({ rel: en.rel, fh: en.fh, rec: rec });
+      }, function () { /* open in Word or unreadable right now: try again next time */ });
+    });
+    return chain.then(function () { SY.newer = newer; });
+  }).then(function () {
+    SY.last = Date.now(); SY.sent += sent;
+    return kv("put", mapKey, map).catch(function () {});
+  }).then(function () {
+    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : ""));
+  }, function (e) { if (e !== "stop") syncStatus("Auto-save hit a problem (" + ((e && (e.code || e.message)) || e) + "). It will try again."); })
+    .then(function () { SY.busy = false; renderSync(); });
+}
+function pullNewer() {
+  if (!SY.handle || !SY.newer.length) return;
+  var list = SY.newer.slice(), root = SY.handle.name, mapKey = "map:" + root, done = 0;
+  SY.handle.requestPermission({ mode: "readwrite" }).then(function (p) {
+    if (p !== "granted") throw new Error("not allowed to write to the folder");
+    return kv("get", mapKey).catch(function () { return null; });
+  }).then(function (m) {
+    var map = m || {}, chain = Promise.resolve();
+    list.forEach(function (n) {
+      chain = chain.then(function () { return getBlob(ref(storage, n.rec.path)); }).then(function (blob) {
+        return n.fh.createWritable().then(function (w) { return w.write(blob).then(function () { return w.close(); }); });
+      }).then(function () { return n.fh.getFile(); }).then(function (f) { map[n.rel] = { lm: f.lastModified }; done++; }, function () {});
+    });
+    return chain.then(function () { return kv("put", mapKey, map); });
+  }).then(function () {
+    SY.newer = []; syncStatus("Updated " + done + (done === 1 ? " file" : " files") + " on this computer" + (done < list.length ? " (close any open in Word and try again for the rest)" : "") + ".");
+    renderSync();
+  }).catch(function (e) { syncStatus("Couldn't update this PC (" + (e.code || e.message) + ")."); });
+}
+$("syncLink").addEventListener("click", linkFolder);
+$("syncResume").addEventListener("click", resume);
+$("syncStop").addEventListener("click", stopSync);
+$("syncTarget").addEventListener("change", function (e) { SY.target = e.target.value; });
+document.addEventListener("click", function (e) { if (e.target && e.target.id === "syncPull") pullNewer(); });
+document.addEventListener("visibilitychange", function () { if (!document.hidden && SY.timer) syncPass(); });
+window.addEventListener("focus", function () { if (SY.timer) syncPass(); });
+/* Pick up a folder linked on an earlier visit. Chrome asks again for permission each visit, so show Resume. */
+function initSync() {
+  renderSync();
+  if (typeof window.showDirectoryPicker !== "function") return;
+  kv("get", "handle").then(function (h) {
+    if (!h) { syncStatus("Link your college or home folder and changes upload by themselves while this tab is open."); return; }
+    SY.handle = h;
+    return h.queryPermission({ mode: "read" }).then(function (p) {
+      if (p === "granted") startTimer();
+      else { $("syncResume").hidden = false; syncStatus("Linked to " + h.name + ". Press Resume to start auto-saving."); renderSync(); }
+    });
+  }).catch(function () {});
+}
+
+$("binDups").addEventListener("click", function () { binSpareCopies().then(function (n) { note(n ? n + " extra " + (n === 1 ? "copy" : "copies") + " moved to the Bin." : ""); }).catch(fail("bin the copies")); });
