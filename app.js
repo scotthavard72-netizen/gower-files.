@@ -176,6 +176,8 @@ function render() {
     return '<button type="button" data-act="cur" data-id="' + esc("lec:" + n) + '" aria-pressed="' + (cur === "lec:" + n) + '"' + (n === nowLec ? ' class="nowlec" title="You\'re in this lecture now"' : "") + ">\u{1F4C1} " + esc(lecShort(n)) + " (" + (counts["lec:" + n] || 0) + ")</button>";
   }).join("");
   var inBin = cur === "bin";
+  /* Keep the row short: For today, Inbox and Bin only show when they have something in them (or are open). */
+  tabs = tabs.filter(function (t) { return ["today", "inbox", "bin"].indexOf(t[0]) < 0 || counts[t[0]] || cur === t[0]; });
   $("chips").innerHTML = tabs.map(function (t) { return '<button type="button" data-act="cur" data-id="' + esc(t[0]) + '" aria-pressed="' + (t[0] === cur || (curLecture() && t[0] === l3)) + '">' + esc(t[1]) + " (" + (counts[t[0]] || 0) + ")</button>"; }).join("");
   var tl = targetLecture();
   $("target").textContent = "Uploads go to: " + (realTarget() === "inbox" ? "Inbox" : folderName(realTarget())) + (tl ? ", tagged " + lecShort(tl) + (tl === lectureNow() && !curLecture() ? " (you're in it now)" : "") : "") + ".";
@@ -320,7 +322,7 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(clearAllOnce).then(function () { return getDoc(doc(db, "users", uid, "meta", "lectures1")).then(function (s) { if (!s.exists()) return setDoc(doc(db, "users", uid, "meta", "lectures1"), { at: Date.now(), skipped: true }); }); }); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(clearAllOnce).then(tidyFoldersOnce).then(function () { return getDoc(doc(db, "users", uid, "meta", "lectures1")).then(function (s) { if (!s.exists()) return setDoc(doc(db, "users", uid, "meta", "lectures1"), { at: Date.now(), skipped: true }); }); }); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
    otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
@@ -815,6 +817,21 @@ function clearAllOnce() {
       return setDoc(flag, { at: t, binned: live.length });
     });
   }).catch(function (e) { note("Couldn't clear the files: " + (e.code || e.message)); });
+}
+/* One-off tidy: remove every empty folder except Level 2 and Level 3 (files in the Bin count as not empty, so nothing is lost). */
+function tidyFoldersOnce() {
+  var flag = doc(db, "users", uid, "meta", "tidy1");
+  return getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    var used = {}; files.forEach(function (f) { if (!f.deletedAt) used[f.folder] = 1; });
+    var gone = folders.filter(function (f) { return !/^level\s*[23]$/i.test(String(f.name).trim()) && !used[f.id]; });
+    var b = writeBatch(db);
+    /* Binned files from a removed folder would restore into Inbox. */
+    files.forEach(function (f) { if (f.deletedAt && gone.some(function (g) { return g.id === f.folder; })) b.update(doc(filecol(), f.id), { folder: "inbox" }); });
+    gone.forEach(function (g) { b.delete(doc(fcol(), g.id)); });
+    b.set(flag, { at: Date.now(), removed: gone.length });
+    return b.commit();
+  }).catch(function (e) { note("Couldn't tidy folders: " + (e.code || e.message)); });
 }
 function autoSortLectures() {
   var flag = doc(db, "users", uid, "meta", "lectures1");
