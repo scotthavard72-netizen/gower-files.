@@ -171,7 +171,7 @@ function render() {
   var nowLec = lectureNow(), l3 = level3Id();
   /* Lecture folders live inside Level 3: they show when Level 3 or one of its lectures is open. */
   var inL3 = !!curLecture() || (l3 && cur === l3);
-  $("lecChips").hidden = !inL3;
+  $("lecChips").hidden = !l3;
   $("lecChips").innerHTML = '<span class="hint">Level 3 \u203a</span>' + LECTURE_NAMES.map(function (n) {
     return '<button type="button" data-act="cur" data-id="' + esc("lec:" + n) + '" aria-pressed="' + (cur === "lec:" + n) + '"' + (n === nowLec ? ' class="nowlec" title="You\'re in this lecture now"' : "") + ">\u{1F4C1} " + esc(lecShort(n)) + " (" + (counts["lec:" + n] || 0) + ")</button>";
   }).join("");
@@ -204,6 +204,7 @@ function render() {
   $("count").textContent = list.length + (list.length === 1 ? " file" : " files") + (inBin ? " in the bin · removed for good after " + BIN_DAYS + " days" : cur === "recent" ? " changed in the last " + RECENT_DAYS + " days" : cur === "today" ? " set aside for today (clears tomorrow)" : cur === "dups" ? " that look like copies of each other, grouped together. Keep one of each and delete the rest." : "");
   $("zipBtn").hidden = inBin || !list.length;
   $("emptyBin").hidden = !inBin || !list.length;
+  $("sortLec").hidden = !(l3 && cur === l3 && live.some(function (f) { return f.folder === l3 && !f.lecture; }));
   $("emptyBin").textContent = sure === "empty" ? "Tap again to empty the bin" : "Empty bin";
   $("emptyBin").classList.toggle("sure", sure === "empty");
 
@@ -319,7 +320,7 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(function () { setTimeout(autoSortLectures, 1500); }); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
    otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
@@ -725,3 +726,67 @@ $("bulkLec").addEventListener("click", function () {
   sel = {};
   b.commit().catch(fail("set the lecture"));
 });
+
+/* ---------- sort Level 3 files into lecture folders ----------
+   Looks at each file's name, the folder it came from, its note and (for Word files) the first part of its text,
+   and scores it against words for each lecture. Files with a clear winner go into that lecture; the rest stay
+   loose in Level 3 so you can move them by hand. It never moves a file you've already put in a lecture. */
+var LECTURE_WORDS = {
+  "Esports Skills, Strategies and Analysis": ["skills", "strateg", "analys", "tactic", "rocket league", "vod", "replay", "gameplay", "rotation", "team comp", "scrim"],
+  "ASBW": ["asbw"],
+  "Introduction to Esports": ["introduction to esports", "intro to esports", "esports industry", "history of esports", "esports history", "ecosystem", "stakeholder", "tournament", "publisher", "intro"],
+  "Enterprise & Entrepreneurship in Esports": ["enterprise", "entrepreneur", "business plan", "pitch", "marketing", "sponsor", "startup", "start-up", "revenue", "swot", "brand"],
+  "Esports Coaching": ["coach", "coaching", "session plan", "player development", "mentor"],
+  "Video Production": ["video", "production", "montage", "premiere", "storyboard", "camera", "editing", "footage", "shot list", "filming", "obs studio"],
+  "Games Design": ["game design", "games design", "level design", "gdd", "prototype", "mechanic", "game concept", "design document"],
+  "Health, Wellbeing and Fitness for Esports Players": ["health", "wellbeing", "well-being", "fitness", "nutrition", "sleep", "exercise", "diet", "posture", "mental health", "hydration"],
+  "GCSE Maths": ["math", "maths", "algebra", "fraction", "equation", "percentage", "geometry", "gcse"]
+};
+function lectureScore(text) {
+  text = " " + String(text || "").toLowerCase() + " ";
+  var best = "", bestN = 0, second = 0;
+  LECTURE_NAMES.forEach(function (l) {
+    var n = 0;
+    (LECTURE_WORDS[l] || []).forEach(function (w) { var m = text.match(new RegExp("\\b" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")); if (m) n += m.length; });
+    if (n > bestN) { second = bestN; bestN = n; best = l; } else if (n > second) second = n;
+  });
+  return bestN > 0 && bestN > second ? best : "";
+}
+function docxText(f) {
+  if (extOf(f.name) !== "docx" || (f.size || 0) > 15 * 1048576) return Promise.resolve("");
+  return loadScript("lib/mammoth.browser.min.js", "mammoth").then(function (m) {
+    return getBlob(ref(storage, f.path)).then(function (b) { return b.arrayBuffer(); }).then(function (buf) { return m.extractRawText({ arrayBuffer: buf }); });
+  }).then(function (r) { return String((r && r.value) || "").slice(0, 6000); }).catch(function () { return ""; });
+}
+function sortIntoLectures(showMsg) {
+  var l3 = level3Id();
+  if (!l3) { if (showMsg) note("There's no Level 3 folder yet."); return Promise.resolve(0); }
+  var todo = files.filter(function (f) { return !f.deletedAt && f.folder === l3 && !f.lecture; });
+  var picks = {}, chain = Promise.resolve(), done = 0;
+  if (showMsg) note("Sorting " + todo.length + " files into lectures...");
+  todo.forEach(function (f) {
+    chain = chain.then(function () {
+      var head = f.name.replace(/[_\-.]+/g, " ") + " " + String(f.rel || "").replace(/level\s*\d\s*esports/ig, "").replace(/[_\-\/]+/g, " ") + " " + (f.note || "");
+      var pick = lectureScore(head);
+      if (pick) { picks[f.id] = pick; return; }
+      return docxText(f).then(function (body) { var p2 = lectureScore(head + " " + body); if (p2) picks[f.id] = p2; });
+    });
+  });
+  return chain.then(function () {
+    var ids = Object.keys(picks); if (!ids.length) return 0;
+    var b = writeBatch(db);
+    ids.forEach(function (id) { b.update(doc(filecol(), id), { lecture: picks[id] }); done++; });
+    return b.commit().then(function () { return done; });
+  }).then(function (n) {
+    if (showMsg) note(n ? n + " of " + todo.length + " files sorted into lecture folders. " + (todo.length - n ? (todo.length - n) + " couldn't be matched and are still loose in Level 3." : "") : "None of the " + todo.length + " loose files could be matched to a lecture.");
+    return n;
+  });
+}
+function autoSortLectures() {
+  var flag = doc(db, "users", uid, "meta", "lectures1");
+  return getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    return sortIntoLectures(true).then(function (n) { return setDoc(flag, { at: Date.now(), sorted: n }); });
+  }).catch(function (e) { note("Couldn't sort into lectures: " + (e.code || e.message)); });
+}
+$("sortLec").addEventListener("click", function () { sortIntoLectures(true).catch(fail("sort into lectures")); });
