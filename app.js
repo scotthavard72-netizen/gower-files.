@@ -279,11 +279,38 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders(); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel); } }
+/* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
+   otherwise older files (last changed before 1 Sept 2026, when Level 3 started) go to Level 2 and newer ones to Level 3. Uses the file's own date from your computer, not the upload date.
+   Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
+var LEVEL_CUTOFF = Date.UTC(2026, 8, 1);
+function sortByLevel() {
+  var flag = doc(db, "users", uid, "meta", "levels1");
+  return getDoc(flag).then(function (s) {
+    if (s.exists()) return;
+    var homeIds = folders.filter(function (f) { return String(f.name).toLowerCase() === "home"; }).map(function (f) { return f.id; });
+    return Promise.all([ensureFolder("Level 3"), ensureFolder("Level 2")]).then(function (ids) {
+      var l3 = ids[0], l2 = ids[1], b = writeBatch(db), used = {}, moved = 0;
+      b.update(doc(fcol(), l3), { order: -2 }); b.update(doc(fcol(), l2), { order: -1 });
+      files.forEach(function (f) {
+        if (f.deletedAt || homeIds.indexOf(f.folder) >= 0) { used[f.folder] = 1; return; }
+        var hint = (String(f.rel || "") + " " + folderName(f.folder)).toLowerCase(), when = f.srcModified || f.createdAt || Date.now();
+        var to = /level\s*3/.test(hint) ? l3 : /level\s*2/.test(hint) ? l2 : (when < LEVEL_CUTOFF ? l2 : l3);
+        if (f.folder !== to) { b.update(doc(filecol(), f.id), { folder: to }); moved++; }
+        used[to] = 1;
+      });
+      folders.forEach(function (fo) {
+        if (fo.id !== l2 && fo.id !== l3 && homeIds.indexOf(fo.id) < 0 && !used[fo.id]) b.delete(doc(fcol(), fo.id));
+      });
+      b.set(flag, { at: Date.now(), moved: moved });
+      return b.commit();
+    });
+  }).catch(function (e) { note("Couldn't sort into levels: " + (e.code || e.message)); });
+}
 /* One-off tidy-up: remove the lecture-name folders that were added at setup. Their files move to Inbox; nothing is deleted. */
 function removeUnitFolders() {
   var flag = doc(db, "users", uid, "meta", "cleanup1");
-  getDoc(flag).then(function (s) {
+  return getDoc(flag).then(function (s) {
     if (s.exists()) return;
     var names = DEFAULT_FOLDERS.filter(function (n) { return n !== "Home"; }).map(function (n) { return n.toLowerCase(); });
     var gone = folders.filter(function (f) { return names.indexOf(String(f.name).toLowerCase()) >= 0; }).map(function (f) { return f.id; });
