@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en-GB"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e131a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gower Files">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Gower Files</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#eef1f4; --surface:#fff; --surface-2:#e4e9ee; --fg:#141b24; --fg-soft:#4a5666; --line:#d3dae2; --accent:#2f4bd8; --accent-ink:#fff; --warn:#d6402b;
+  --display:"Bricolage Grotesque","DM Sans",system-ui,sans-serif; --body:"DM Sans",system-ui,sans-serif; --mono:"DM Mono",ui-monospace,Menlo,monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0e131a; --surface:#161d27; --surface-2:#1f2834; --fg:#eaeff5; --fg-soft:#9aa7b8; --line:#2a3442; --accent:#7f93ff; --accent-ink:#0e131a; --warn:#ff7d68; color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--body); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); min-height: 100vh; }
+[hidden] { display: none !important; }
+.wrap { max-width: 720px; margin: 0 auto; padding: 18px 16px 60px; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+h1 { font: 700 1.6rem var(--display); letter-spacing: -0.02em; margin: 0; }
+h2 { font: 700 1.05rem var(--display); margin: 0; }
+.hint { color: var(--fg-soft); font-size: .84rem; }
+.btn { font: inherit; font-weight: 600; cursor: pointer; border: 0; border-radius: 8px; padding: 10px 14px; background: var(--accent); color: var(--accent-ink); }
+.btn.alt { background: var(--surface-2); color: var(--fg); }
+.btn:disabled { opacity: .5; cursor: default; }
+.link { font: inherit; font-size: .82rem; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 4px 2px; text-decoration: underline; text-underline-offset: 3px; }
+.link.warn.sure { color: var(--warn); font-weight: 600; }
+input[type=text], select { font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; min-width: 0; width: 100%; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#gate { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 24px; }
+#gate .box { max-width: 380px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px 14px; text-align: center; background: var(--surface); display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.drop.over { border-color: var(--accent); background: var(--surface-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { font: inherit; font-size: .85rem; cursor: pointer; background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: 16px; padding: 5px 11px; max-width: 100%; }
+.chips button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.tools { display: grid; grid-template-columns: 1fr 120px 110px; gap: 8px; }
+@media (max-width: 460px) { .tools { grid-template-columns: 1fr 1fr; } .tools input { grid-column: 1 / -1; } }
+.countrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tag { font: 500 .7rem var(--mono); text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.tag.Draft { border-color: #d9a400; } .tag.Submitted { border-color: #2fa36b; } .tag.Feedback { border-color: var(--accent); } .tag.Todo { border-color: var(--warn); }
+.more { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; font-size: .86rem; }
+.more .chips button { font-size: .78rem; padding: 3px 9px; }
+.vrow { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; color: var(--fg-soft); }
+.notef { font-style: italic; color: var(--fg-soft); font-size: .84rem; margin-top: 3px; overflow-wrap: anywhere; }
+#modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex; flex-direction: column; padding: 12px; gap: 8px; }
+#modal .mbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #fff; }
+#modal .mbar b { overflow-wrap: anywhere; }
+#modal .mbody { flex: 1; background: var(--surface); border-radius: 10px; overflow: auto; display: flex; align-items: center; justify-content: center; }
+#modal iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+#modal img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#modal pre { align-self: stretch; margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font: .86rem/1.5 var(--mono); width: 100%; }
+.file { display: grid; grid-template-columns: 24px 40px 1fr; gap: 10px; align-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.file.sel { border-color: var(--accent); }
+.file input[type=checkbox] { width: 20px; height: 20px; margin: 8px 0 0; accent-color: var(--accent); }
+.ext { font: 500 .68rem var(--mono); text-transform: uppercase; background: var(--surface-2); border-radius: 6px; height: 40px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.fn { font-weight: 600; overflow-wrap: anywhere; }
+.meta { color: var(--fg-soft); font-size: .8rem; display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 2px; }
+.acts { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.none { border: 1px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--fg-soft); }
+.bulk { position: sticky; bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--accent); border-radius: 10px; padding: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.bulk select { width: auto; flex: 1; min-width: 130px; }
+.up { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: .84rem; }
+.up .bar { height: 5px; border-radius: 3px; background: var(--surface-2); margin-top: 5px; overflow: hidden; }
+.up .bar span { display: block; height: 100%; background: var(--accent); width: 0; }
+.up.err { border-color: var(--warn); color: var(--warn); }
+details.fold { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var(--display); }
+.fbody { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+.frow { display: flex; gap: 8px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
+.inline { display: flex; gap: 8px; }
+.meter { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin-bottom: 6px; }
+.meter span { display: block; height: 100%; background: var(--accent); }
+.meter span.hi { background: var(--warn); }
+.sharebox { display: flex; flex-direction: column; gap: 6px; }
+.notice { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: .86rem; }
+.notice.err { color: var(--warn); }
+</style>
+</head><body>
+<div id="gate"><div class="box">
+  <h1>Gower Files</h1>
+  <div id="gateMsg" class="hint">Sign in with Google to open your files.</div>
+  <div id="gBtn" style="display:flex;justify-content:center;min-height:44px"></div>
+  <button class="btn" id="signIn" type="button">Sign in with Google</button>
+</div></div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <h1>Gower Files</h1>
+    <div><a class="link" href="https://claude.ai/artifact/LDX5L2xfD3QST9wyxTTvy4" target="_blank" rel="noopener">Gower Hub &#8599;</a> <span class="hint" id="who"></span> <button class="link" id="signOut" type="button">Sign out</button></div>
+  </header>
+  <div class="notice err" id="note" hidden></div>
+
+  <div class="drop" id="drop">
+    <div><b>Drop files here</b> or</div>
+    <div class="inline" style="justify-content:center;flex-wrap:wrap">
+      <button class="btn" id="pick" type="button">Choose files</button>
+      <button class="btn alt" id="pickDir" type="button">Choose a whole folder</button>
+    </div>
+    <input type="file" id="fileInput" multiple hidden>
+    <input type="file" id="dirInput" webkitdirectory multiple hidden>
+    <input type="file" id="replaceInput" hidden>
+    <div class="hint" id="target"></div>
+    <div class="hint">Same name in the same folder? It's saved as a newer version, not a copy.</div>
+  </div>
+  <div class="list" id="ups"></div>
+
+  <div class="chips" id="chips"></div>
+  <div class="tools">
+    <input type="text" id="q" placeholder="Search names, tags and notes" aria-label="Search files">
+    <select id="tagF" aria-label="Filter by tag"><option value="">Any tag</option></select>
+    <select id="sort" aria-label="Sort"><option value="new">Newest</option><option value="old">Oldest</option><option value="name">Name</option><option value="size">Biggest</option></select>
+  </div>
+  <div class="countrow"><span class="hint" id="count"></span><span><button class="link" id="zipBtn" type="button">Download these as a zip</button><button class="link warn" id="emptyBin" type="button" hidden>Empty bin</button></span></div>
+  <div class="hint" id="zipMsg" hidden></div>
+  <div class="list" id="files"></div>
+
+  <details class="fold">
+    <summary>Folders</summary>
+    <div class="fbody">
+      <div id="folderRows"></div>
+      <form class="inline" id="folderForm" autocomplete="off">
+        <input type="text" id="folderName" maxlength="60" placeholder="New folder name" aria-label="New folder name">
+        <button class="btn" type="submit">Add</button>
+      </form>
+      <div class="hint">Deleting a folder moves its files to Inbox. It never deletes files.</div>
+      <label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="autoFile"> During a lecture, uploads go into that lecture's folder (on All, For today and Recent)</label>
+    </div>
+  </details>
+  <div class="hint" id="usage"></div>
+</div>
+
+<div class="bulk" id="bulk" hidden style="position:fixed;left:16px;right:16px;max-width:688px;margin:0 auto;bottom:calc(10px + env(safe-area-inset-bottom))">
+  <b id="bulkN"></b>
+  <select id="bulkTo" aria-label="Move to folder"></select>
+  <button class="btn" id="bulkMove" type="button">Move</button>
+  <button class="btn alt" id="bulkBin" type="button">Bin</button>
+  <button class="btn alt" id="bulkClear" type="button">Clear</button>
+</div>
+
+<div id="modal" hidden role="dialog" aria-modal="true" aria-label="Preview">
+  <div class="mbar"><b id="mTitle"></b><span><button class="btn alt" id="mDl" type="button">Download</button> <button class="btn" id="mClose" type="button">Close</button></span></div>
+  <div class="mbody" id="mBody"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});</script>
+</body></html>

@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isMe(uid) {
+      return request.auth != null && request.auth.uid == uid
+        && request.auth.token.email == 'scotthavard72@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+    // Your files: only you. Each file is capped at 100 MB.
+    match /users/{uid}/{allPaths=**} {
+      allow read, delete: if isMe(uid);
+      allow write: if isMe(uid) && request.resource.size < 100 * 1024 * 1024;
+    }
+    // Share links: a copy anyone with the link can download until its expiry time, then nobody but you.
+    match /share/{uid}/{id}/{name} {
+      allow read: if isMe(uid) || (resource.metadata.exp != null && int(resource.metadata.exp) > request.time.toMillis());
+      allow delete: if isMe(uid);
+      allow write: if isMe(uid) && request.resource.size < 100 * 1024 * 1024 && request.resource.metadata.exp != null;
+    }
+  }
+}
