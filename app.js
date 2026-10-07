@@ -281,11 +281,11 @@ function download(path, name) {
 var foldersLoaded = false, filesLoaded = false, tidied = false;
 function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
-   otherwise older files (last changed before 1 Sept 2026, when Level 3 started) go to Level 2 and newer ones to Level 3. Uses the file's own date from your computer, not the upload date.
+   otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
-var LEVEL_CUTOFF = Date.UTC(2026, 8, 1);
+var LEVEL_CUTOFF = Date.UTC(2026, 0, 1);
 function sortByLevel() {
-  var flag = doc(db, "users", uid, "meta", "levels1");
+  var flag = doc(db, "users", uid, "meta", "levels2");
   return getDoc(flag).then(function (s) {
     if (s.exists()) return;
     var homeIds = folders.filter(function (f) { return String(f.name).toLowerCase() === "home"; }).map(function (f) { return f.id; });
