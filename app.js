@@ -947,7 +947,7 @@ function syncPass() {
         if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
         map[en.rel] = { lm: file.lastModified };
         if (src > file.lastModified) newer.push({ rel: en.rel, fh: en.fh, rec: rec });
-      }, function () { /* open in Word or unreadable right now: try again next time */ })
+      }, function (e) { /* open in Word or unreadable right now: try again next time, but say so */ SY.errors.push(en.rel.split("/").pop() + " (can't be read: " + ((e && (e.name || e.message)) || "locked") + ")"); })
         /* One file failing must not stop the rest: note it and carry on. */
         .catch(function (e) { sent = Math.max(0, sent - 1); SY.errors.push(en.rel.split("/").pop() + " (" + ((e && (e.code || e.message)) || e) + ")"); });
     });
@@ -956,7 +956,7 @@ function syncPass() {
     SY.last = Date.now(); SY.sent += sent;
     return kv("put", mapKey, map).catch(function () {});
   }).then(function () {
-    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 3).join(", ") : ""));
+    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 4).join(", ") + (SY.errors.length > 4 ? "..." : "") : ""));
   }, function (e) { if (e !== "stop") syncStatus("Auto-save hit a problem (" + ((e && (e.code || e.message)) || e) + "). It will try again."); })
     .then(function () { SY.busy = false; renderSync(); });
 }
