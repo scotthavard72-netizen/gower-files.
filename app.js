@@ -883,7 +883,7 @@ function renderSync() {
   $("syncBox").hidden = false;
   if (!ok) { $("syncLink").hidden = true; $("syncResume").hidden = true; $("syncStop").hidden = true; syncStatus("Works in Chrome or Edge on a computer."); return; }
   $("syncBox").classList.toggle("on", !!SY.timer);
-  $("syncStop").hidden = !SY.handle;
+  $("syncStop").hidden = !SY.handle; $("syncNow").hidden = !SY.timer;
   $("syncLink").textContent = SY.handle ? "Change folder" : "Link a folder";
   $("syncNewer").innerHTML = SY.newer.length ? '<div class="hint">' + SY.newer.length + (SY.newer.length === 1 ? " file is" : " files are") + " newer in Gower Files than on this computer (changed somewhere else): " + SY.newer.slice(0, 5).map(function (n) { return esc(n.rel.split("/").pop()); }).join(", ") + (SY.newer.length > 5 ? "..." : "") + '</div><div><button class="btn alt" type="button" id="syncPull">Update this PC</button></div>' : "";
 }
@@ -935,6 +935,7 @@ function syncPass() {
   }).then(function (entries) {
     var byRel = {}; files.forEach(function (f) { if (!f.deletedAt && f.rel) byRel[f.rel] = f; });
     var newer = [], chain = Promise.resolve();
+    SY.errors = [];
     entries.forEach(function (en) {
       chain = chain.then(function () { return en.fh.getFile(); }).then(function (file) {
         var rec = byRel[en.rel], seen = map[en.rel];
@@ -946,14 +947,16 @@ function syncPass() {
         if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
         map[en.rel] = { lm: file.lastModified };
         if (src > file.lastModified) newer.push({ rel: en.rel, fh: en.fh, rec: rec });
-      }, function () { /* open in Word or unreadable right now: try again next time */ });
+      }, function () { /* open in Word or unreadable right now: try again next time */ })
+        /* One file failing must not stop the rest: note it and carry on. */
+        .catch(function (e) { sent = Math.max(0, sent - 1); SY.errors.push(en.rel.split("/").pop() + " (" + ((e && (e.code || e.message)) || e) + ")"); });
     });
     return chain.then(function () { SY.newer = newer; });
   }).then(function () {
     SY.last = Date.now(); SY.sent += sent;
     return kv("put", mapKey, map).catch(function () {});
   }).then(function () {
-    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : ""));
+    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 3).join(", ") : ""));
   }, function (e) { if (e !== "stop") syncStatus("Auto-save hit a problem (" + ((e && (e.code || e.message)) || e) + "). It will try again."); })
     .then(function () { SY.busy = false; renderSync(); });
 }
@@ -995,3 +998,5 @@ function initSync() {
     });
   }).catch(function () {});
 }
+
+$("syncNow").addEventListener("click", function () { syncPass(); });

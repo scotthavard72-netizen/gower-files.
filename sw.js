@@ -1,5 +1,5 @@
 // Keeps the app opening offline. The page is fetched fresh when online and falls back to the saved copy.
-const CACHE = "gowerfiles-v12";
+const CACHE = "gowerfiles-v13";
 const SHELL = ["./", "index.html", "app.js", "firebase-config.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 const CDN = ["www.gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com", "cdnjs.cloudflare.com"];
 
