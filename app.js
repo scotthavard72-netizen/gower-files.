@@ -934,13 +934,25 @@ function syncPass() {
     return walkDir(SY.handle, root, []);
   }).then(function (entries) {
     var byRel = {}; files.forEach(function (f) { if (!f.deletedAt && f.rel) byRel[f.rel] = f; });
-    var newer = [], chain = Promise.resolve();
+    var newer = [], chain = Promise.resolve(), localRels = {}, renamed = 0;
+    entries.forEach(function (en) { localRels[en.rel] = 1; });
     SY.errors = [];
     entries.forEach(function (en) {
       chain = chain.then(function () { return en.fh.getFile(); }).then(function (file) {
         var rec = byRel[en.rel], seen = map[en.rel];
         if (file.size > 100 * 1048576) return;
-        if (!rec) { sent++; return folderFor(en.rel).then(function (dest) { return sendNew(file, dest.folder, en.rel, null, dest.lecture); }).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        if (!rec) {
+          /* Renamed or moved on the computer? A file in Gower Files with the same size and date whose old path is
+             gone from the folder is the same file: rename it there instead of uploading a copy. */
+          var moved = files.filter(function (f) { return !f.deletedAt && f.rel && !localRels[f.rel] && f.size === file.size && f.srcModified === file.lastModified && String(f.rel).split("/")[0] === root; })[0];
+          if (moved) {
+            var nm = en.rel.split("/").pop(); moved.rel = en.rel; moved.name = nm; byRel[en.rel] = moved;
+            return Promise.resolve().then(function () { return updateMetadata(ref(storage, moved.path), { contentDisposition: dispo(nm) }); }).catch(function () {})
+              .then(function () { return updateDoc(doc(filecol(), moved.id), { rel: en.rel, name: nm }); })
+              .then(function () { map[en.rel] = { lm: file.lastModified }; renamed++; });
+          }
+          sent++; return folderFor(en.rel).then(function (dest) { return sendNew(file, dest.folder, en.rel, null, dest.lecture); }).then(function () { map[en.rel] = { lm: file.lastModified }; });
+        }
         var src = rec.srcModified || 0;
         /* Changed here since the last check (or, the first time, newer here than in Gower Files): upload it as a new version. */
         var localChanged = seen ? file.lastModified !== seen.lm : (file.lastModified > src || (file.lastModified === src && file.size !== rec.size));
@@ -951,12 +963,20 @@ function syncPass() {
         /* One file failing must not stop the rest: note it and carry on. */
         .catch(function (e) { sent = Math.max(0, sent - 1); SY.errors.push(en.rel.split("/").pop() + " (" + ((e && (e.code || e.message)) || e) + ")"); });
     });
-    return chain.then(function () { SY.newer = newer; });
+    return chain.then(function () {
+      SY.newer = newer;
+      var live = files.filter(function (f) { return !f.deletedAt && f.rel && String(f.rel).split("/")[0] === root; });
+      var stale = live.filter(function (f) { return !localRels[f.rel] && live.some(function (g) { return g !== f && localRels[g.rel] && g.size === f.size && g.srcModified === f.srcModified; }); });
+      if (!stale.length) return;
+      var b = writeBatch(db), tm = Date.now();
+      stale.forEach(function (f) { b.update(doc(filecol(), f.id), { deletedAt: tm }); });
+      return b.commit().then(function () { renamed += stale.length; });
+    }).then(function () { SY.renamed = renamed; });
   }).then(function () {
     SY.last = Date.now(); SY.sent += sent;
     return kv("put", mapKey, map).catch(function () {});
   }).then(function () {
-    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 4).join(", ") + (SY.errors.length > 4 ? "..." : "") : ""));
+    syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.renamed ? " · " + SY.renamed + " renamed to match" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 4).join(", ") + (SY.errors.length > 4 ? "..." : "") : ""));
   }, function (e) { if (e !== "stop") syncStatus("Auto-save hit a problem (" + ((e && (e.code || e.message)) || e) + "). It will try again."); })
     .then(function () { SY.busy = false; renderSync(); });
 }
