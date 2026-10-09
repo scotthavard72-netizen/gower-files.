@@ -936,7 +936,7 @@ function syncPass() {
     var byRel = {}; files.forEach(function (f) { if (!f.deletedAt && f.rel) byRel[f.rel] = f; });
     var newer = [], chain = Promise.resolve(), localRels = {}, renamed = 0;
     entries.forEach(function (en) { localRels[en.rel] = 1; });
-    SY.errors = [];
+    SY.errors = []; SY.saved = [];
     entries.forEach(function (en) {
       chain = chain.then(function () { return en.fh.getFile(); }).then(function (file) {
         var rec = byRel[en.rel], seen = map[en.rel];
@@ -951,12 +951,12 @@ function syncPass() {
               .then(function () { return updateDoc(doc(filecol(), moved.id), { rel: en.rel, name: nm }); })
               .then(function () { map[en.rel] = { lm: file.lastModified }; renamed++; });
           }
-          sent++; return folderFor(en.rel).then(function (dest) { return sendNew(file, dest.folder, en.rel, null, dest.lecture); }).then(function () { map[en.rel] = { lm: file.lastModified }; });
+          sent++; var where = ""; return folderFor(en.rel).then(function (dest) { where = (classifyRel(en.rel).level === 2 ? "Level 2" : "Level 3") + (dest.lecture ? " › " + dest.lecture : ""); return sendNew(file, dest.folder, en.rel, null, dest.lecture); }).then(function () { map[en.rel] = { lm: file.lastModified }; SY.saved.push({ name: file.name, where: where }); });
         }
         var src = rec.srcModified || 0;
         /* Changed here since the last check (or, the first time, newer here than in Gower Files): upload it as a new version. */
         var localChanged = seen ? file.lastModified !== seen.lm : (file.lastModified > src || (file.lastModified === src && file.size !== rec.size));
-        if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; }); }
+        if (localChanged) { sent++; return sendVersion(rec, file, null).then(function () { map[en.rel] = { lm: file.lastModified }; SY.saved.push({ name: file.name, where: "new version" }); }); }
         map[en.rel] = { lm: file.lastModified };
         if (src > file.lastModified) newer.push({ rel: en.rel, fh: en.fh, rec: rec });
       }, function (e) { /* open in Word or unreadable right now: try again next time, but say so */ SY.errors.push(en.rel.split("/").pop() + " (can't be read: " + ((e && (e.name || e.message)) || "locked") + ")"); })
@@ -974,6 +974,7 @@ function syncPass() {
     }).then(function () { SY.renamed = renamed; });
   }).then(function () {
     SY.last = Date.now(); SY.sent += sent;
+    if (SY.saved && SY.saved.length) notifySaved(SY.saved);
     return kv("put", mapKey, map).catch(function () {});
   }).then(function () {
     syncStatus("Auto-saving " + root + " · checked " + fmtDate(SY.last).split(", ").pop() + (SY.sent ? " · " + SY.sent + " saved this session" : "") + (SY.renamed ? " · " + SY.renamed + " renamed to match" : "") + (SY.errors.length ? " · " + SY.errors.length + " couldn't upload: " + SY.errors.slice(0, 4).join(", ") + (SY.errors.length > 4 ? "..." : "") : ""));
@@ -1020,3 +1021,33 @@ function initSync() {
 }
 
 $("syncNow").addEventListener("click", function () { syncPass(); });
+
+/* ---------- "Saved" pop-ups: so you don't have to keep checking ---------- */
+function toast(title, body) {
+  var box = $("toasts"); if (!box) return;
+  var t = document.createElement("div"); t.className = "toast";
+  t.innerHTML = "<b>" + esc(title) + "</b>" + esc(body);
+  box.appendChild(t);
+  setTimeout(function () { t.remove(); }, 8000);
+}
+function notifySaved(list) {
+  var title = list.length === 1 ? "Saved to Gower Files" : list.length + " files saved to Gower Files";
+  var body = list.slice(0, 4).map(function (s) { return s.name + (s.where ? " → " + s.where : ""); }).join("\n") + (list.length > 4 ? "\n+" + (list.length - 4) + " more" : "");
+  toast(title, body);
+  if ("Notification" in window && Notification.permission === "granted") {
+    try { new Notification(title, { body: body, icon: "icon-192.png", tag: "gf-saved-" + Date.now() }); } catch (e) {}
+  }
+}
+function renderNotify() {
+  var b = $("syncNotify"); if (!b) return;
+  b.hidden = !("Notification" in window) || Notification.permission !== "default";
+}
+if ($("syncNotify")) {
+  $("syncNotify").addEventListener("click", function () {
+    Notification.requestPermission().then(function (p) {
+      renderNotify();
+      if (p === "granted") toast("Pop-ups are on", "You'll see one each time auto-save puts a file in Gower Files.");
+    });
+  });
+  renderNotify();
+}

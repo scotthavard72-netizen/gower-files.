@@ -88,6 +88,9 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
 .sync.on { border-color: #2fa36b; }
 .notice { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: .86rem; }
 .notice.err { color: var(--warn); }
+.toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; max-width: min(360px, calc(100vw - 32px)); }
+.toast { white-space: pre-line; background: #1d3b2c; color: #e8fff2; border: 1px solid #2fa36b; border-radius: 10px; padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: 14px; }
+.toast b { display: block; margin-bottom: 2px; }
 </style>
 </head><body>
 <div id="gate"><div class="box">
@@ -111,6 +114,7 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
       <button class="btn" id="syncResume" type="button" hidden>Resume auto-save</button>
       <button class="link" id="syncNow" type="button" hidden>Check now</button>
       <button class="link" id="syncStop" type="button" hidden>Stop</button>
+      <button class="link" id="syncNotify" type="button" hidden>Turn on pop-ups</button>
     </div>
     <div id="syncNewer"></div>
   </section>
@@ -171,4 +175,5 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
 
 <script type="module" src="app.js"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});</script>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 </body></html>
