@@ -88,6 +88,10 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
 .sync.on { border-color: #2fa36b; }
 .notice { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: .86rem; }
 .notice.err { color: var(--warn); }
+.hand { background: var(--surface); border: 1px solid #5b6cff; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.hand ul { margin: 0; padding-left: 18px; }
+.hand li { margin: 2px 0; }
+.hand .when { color: var(--muted, #9aa3b5); font-size: 13px; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; max-width: min(360px, calc(100vw - 32px)); }
 .toast { white-space: pre-line; background: #1d3b2c; color: #e8fff2; border: 1px solid #2fa36b; border-radius: 10px; padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: 14px; }
 .toast b { display: block; margin-bottom: 2px; }
@@ -106,6 +110,8 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
     <div><a class="link" href="https://claude.ai/artifact/LDX5L2xfD3QST9wyxTTvy4" target="_blank" rel="noopener">Gower Hub &#8599;</a> <span class="hint" id="who"></span> <button class="link" id="signOut" type="button">Sign out</button></div>
   </header>
   <div class="notice err" id="note" hidden></div>
+
+  <section class="hand" id="handBox" hidden></section>
 
   <section class="sync" id="syncBox" hidden>
     <div class="syncrow"><b>Auto-save from this computer</b><span class="hint" id="syncStatus"></span></div>

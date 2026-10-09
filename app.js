@@ -97,6 +97,10 @@ function start() {
     if (!SY.inited) { SY.inited = true; initSync(); } else renderSync();
     liveRender();
   }, function (e) { note("Can't load folders: " + e.message); }));
+  unsubs.push(onSnapshot(collection(db, "users", uid, "devices"), function (s) {
+    DEVNAMES = {}; s.docs.forEach(function (d) { DEVNAMES[d.id] = d.data().name || ""; });
+    liveRender();
+  }, function () {}));
   unsubs.push(onSnapshot(filecol(), function (s) {
     files = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; });
     if (!purged) { purged = true; purgeBin(); cleanShares(); }
@@ -140,8 +144,8 @@ function applyUrl() {
     if (fo || q || lec) history.replaceState(null, "", location.pathname);
   } catch (e) {}
 }
-function londonParts() {
-  var o = {}; new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }).formatToParts(new Date()).forEach(function (p) { o[p.type] = p.value; });
+function londonParts(d) {
+  var o = {}; new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }).formatToParts(d || new Date()).forEach(function (p) { o[p.type] = p.value; });
   return { date: o.year + "-" + o.month + "-" + o.day, min: +o.hour * 60 + +o.minute, dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(o.weekday) };
 }
 function hm(s) { var p = s.split(":"); return +p[0] * 60 + +p[1]; }
@@ -157,7 +161,7 @@ function curLecture() { return cur.indexOf("lec:") === 0 ? cur.slice(4) : ""; }
 function lecShort(n) { return n === "Health, Wellbeing and Fitness for Esports Players" ? "Health & Wellbeing" : n === "Esports Skills, Strategies and Analysis" ? "Skills & Strategies" : n === "Enterprise & Entrepreneurship in Esports" ? "Enterprise" : n; }
 /* "New since last time": each device remembers when you last looked. Files added or changed after that on
    another device (or before this device started tagging uploads) get a New tag and their own chip. */
-var DEVICE = "", LAST_SEEN = 0;
+var DEVICE = "", LAST_SEEN = 0, DEVNAMES = {};
 try {
   DEVICE = localStorage.getItem("gf-device") || ""; if (!DEVICE) { DEVICE = newId(); localStorage.setItem("gf-device", DEVICE); }
   LAST_SEEN = +localStorage.getItem("gf-lastseen") || 0;
@@ -176,6 +180,7 @@ function render() {
   var today = londonParts().date, todays = live.filter(function (f) { return f.today === today; });
   var dups = findDuplicates(live); dupOf = dups.of;
   var news = live.filter(isNew);
+  renderHand(news);
   var counts = { new: news.length, all: live.length, today: todays.length, recent: Math.min(recent.length, 20), bin: binned.length, dups: dups.list.length };
   live.forEach(function (f) { var k = realFolder(f.folder); counts[k] = (counts[k] || 0) + 1; });
   var tabs = [["all", "All"], ["new", "New"], ["today", "For today"], ["recent", "Recent"], ["inbox", "Inbox"]].concat(folders.map(function (f) { return [f.id, f.name]; }), dups.list.length || cur === "dups" ? [["dups", "Duplicates"]] : [], [["bin", "Bin"]]);
@@ -281,14 +286,14 @@ function fileRow(f) {
     more = '<div class="more"><div class="chips">' + TAGS.map(function (t) { return '<button type="button" data-act="tag" data-id="' + esc(f.id) + '" data-tag="' + t + '" aria-pressed="' + (tags.indexOf(t) >= 0) + '">' + t + "</button>"; }).join("") + "</div>" +
       '<label class="hint" style="display:flex;gap:6px;align-items:center">Lecture <select data-act="setLec" data-id="' + esc(f.id) + '" style="width:auto"><option value="">None</option>' + LECTURE_NAMES.map(function (n) { return "<option" + (f.lecture === n ? " selected" : "") + ' value="' + esc(n) + '">' + esc(lecShort(n)) + "</option>"; }).join("") + "</select></label>" +
       '<form class="inline" data-act="noteForm" data-id="' + esc(f.id) + '"><input type="text" maxlength="200" placeholder="Add a note, e.g. needs references" value="' + esc(f.note || "") + '" aria-label="Note"><button class="btn alt" type="submit">Save note</button></form>' +
-      '<div><button class="link" type="button" data-act="replace" data-id="' + esc(f.id) + '">Upload a newer version</button> <button class="link" type="button" data-act="share" data-id="' + esc(f.id) + '">Make a share link (' + SHARE_HOURS + ' hours)</button></div>' +
+      '<div><button class="link" type="button" data-act="replace" data-id="' + esc(f.id) + '">Upload a newer version</button> <span class="hint">Share link for</span> <button class="link" type="button" data-act="share" data-hours="24" data-id="' + esc(f.id) + '">1 day</button> <button class="link" type="button" data-act="share" data-hours="72" data-id="' + esc(f.id) + '">3 days</button> <button class="link" type="button" data-act="share" data-hours="168" data-id="' + esc(f.id) + '">a week</button></div>' +
       (shareOut[f.id] ? '<div class="sharebox">' + shareOut[f.id] + "</div>" : "") +
       (f.rel ? '<div class="hint">From: ' + esc(f.rel) + "</div>" : "") +
       (vs.length ? '<div><b>Older versions</b></div>' + vs.slice().reverse().map(function (v) {
         return '<div class="vrow"><span>' + fmtDate(v.at || 0) + " · " + fmtSize(v.size || 0) + '</span><span><button class="link" type="button" data-act="vdl" data-id="' + esc(f.id) + '" data-path="' + esc(v.path) + '">Download</button> <button class="link" type="button" data-act="vrestore" data-id="' + esc(f.id) + '" data-path="' + esc(v.path) + '">Make current</button></span></div>';
       }).join("") : '<div class="hint">No older versions yet.</div>') + "</div>";
   }
-  return '<div class="file' + (sel[f.id] ? " sel" : "") + '"><input type="checkbox" data-act="sel" data-id="' + esc(f.id) + '"' + (sel[f.id] ? " checked" : "") + ' aria-label="Select ' + esc(f.name) + '"><div class="ext">' + esc(ext.slice(0, 4) || "file") + "</div><div>" +
+  return '<div class="file' + (sel[f.id] ? " sel" : "") + '" data-row="' + esc(f.id) + '"><input type="checkbox" data-act="sel" data-id="' + esc(f.id) + '"' + (sel[f.id] ? " checked" : "") + ' aria-label="Select ' + esc(f.name) + '"><div class="ext">' + esc(ext.slice(0, 4) || "file") + "</div><div>" +
     (isEd ? '<form class="inline" data-act="renameForm" data-id="' + esc(f.id) + '"><input type="text" id="renameIn" value="' + esc(f.name) + '" maxlength="140"><button class="btn" type="submit">Save</button><button class="btn alt" type="button" data-act="renameCancel">Cancel</button></form>' : '<div class="fn">' + esc(f.name) + "</div>") +
     '<div class="meta">' + meta + "</div>" + (f.note && !open[f.id] ? '<div class="notef">' + esc(f.note) + "</div>" : "") +
     '<div class="acts"><button class="link" type="button" data-act="dl" data-id="' + esc(f.id) + '">Download</button>' +
@@ -320,7 +325,7 @@ document.addEventListener("click", function (e) {
   if (act === "preview") { preview(id); return; }
   if (act === "replace") { replaceId = id; $("replaceInput").click(); return; }
   if (act === "today") { var tf0 = byId(id), td = londonParts().date; if (tf0) updateDoc(doc(filecol(), id), { today: tf0.today === td ? "" : td }).catch(fail("set aside")); return; }
-  if (act === "share") { makeShare(id); return; }
+  if (act === "share") { makeShare(id, +(b.getAttribute("data-hours")) || SHARE_HOURS); return; }
   if (act === "copy") { copyText(b.getAttribute("data-url"), b); return; }
   if (act === "tag") { toggleTag(id, b.getAttribute("data-tag")); return; }
   if (act === "restore") { updateDoc(doc(filecol(), id), { deletedAt: null }).catch(fail("restore")); return; }
@@ -468,10 +473,10 @@ $("tagF").addEventListener("change", render);
    until then, and nobody but you after. Expired copies are deleted next time you open the app. */
 var shareOut = {};
 function shareCol() { return collection(db, "users", uid, "shares"); }
-function makeShare(id) {
+function makeShare(id, hours) {
   var f = byId(id); if (!f) return;
   shareOut[id] = '<span class="hint">Making a link...</span>'; render();
-  var sid = newId(), exp = Date.now() + SHARE_HOURS * 3600000, path = "share/" + uid + "/" + sid + "/" + safeName(f.name);
+  var sid = newId(), exp = Date.now() + (hours || SHARE_HOURS) * 3600000, path = "share/" + uid + "/" + sid + "/" + safeName(f.name);
   getBlob(ref(storage, f.path)).then(function (blob) {
     return uploadBytes(ref(storage, path), blob, { contentType: f.type || blob.type || "application/octet-stream", contentDisposition: dispo(f.name), customMetadata: { exp: String(exp) } });
   }).then(function () {
@@ -1051,3 +1056,51 @@ if ($("syncNotify")) {
   });
   renderNotify();
 }
+
+/* ---------- Handover: what you did on your other computer since you were last here ---------- */
+var handHidden = false;
+function devName(id) { return DEVNAMES[id] || (id ? "your other computer" : "before devices were tracked"); }
+function dayWord(ms) {
+  var d = londonParts(new Date(ms)).date, t = londonParts().date, y = londonParts(new Date(Date.now() - DAY)).date;
+  return d === t ? "today" : d === y ? "yesterday" : "on " + new Date(ms).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
+}
+function renderHand(news) {
+  var box = $("handBox"); if (!box) return;
+  var mine = DEVNAMES[DEVICE];
+  var nameRow = mine
+    ? '<div class="hint">This computer: <b>' + esc(mine) + '</b> · <button class="link" type="button" data-hand="rename">rename</button></div>'
+    : '<div class="hint">Name this computer so the other one can say where files came from: <button class="link" type="button" data-hand="name" data-name="College PC">College PC</button> · <button class="link" type="button" data-hand="name" data-name="Home PC">Home PC</button> · <button class="link" type="button" data-hand="name" data-name="Laptop">Laptop</button> · <button class="link" type="button" data-hand="name" data-name="Phone">Phone</button></div>';
+  var list = news.filter(function (f) { return f.by; });
+  if ((!list.length || handHidden) && mine) { box.hidden = true; box.innerHTML = ""; return; }
+  var html = "";
+  if (list.length && !handHidden) {
+    var groups = {}, order = [];
+    list.slice().sort(function (x, y) { return changedAt(y) - changedAt(x); }).forEach(function (f) {
+      var k = f.by + "|" + dayWord(changedAt(f));
+      if (!groups[k]) { groups[k] = []; order.push(k); }
+      groups[k].push(f);
+    });
+    html += '<div class="syncrow"><b>Since you were last on here</b><span class="hint">' + list.length + (list.length === 1 ? " file" : " files") + ' changed</span></div>';
+    order.forEach(function (k) {
+      var g = groups[k], by = k.split("|")[0], when = k.split("|")[1];
+      html += '<div>On <b>' + esc(devName(by)) + '</b> ' + esc(when) + ':</div><ul>' + g.slice(0, 8).map(function (f) {
+        var isUpd = f.updatedAt && f.createdAt && f.updatedAt - f.createdAt > 60000;
+        return '<li>' + (isUpd ? "Changed " : "Added ") + '<button class="link" type="button" data-hand="go" data-id="' + esc(f.id) + '">' + esc(f.name) + '</button> <span class="when">' + esc(f.lecture ? lecShort(f.lecture) : folderName(f.folder)) + ' · ' + esc(fmtDate(changedAt(f)).split(", ").pop()) + '</span></li>';
+      }).join("") + (g.length > 8 ? '<li class="when">+' + (g.length - 8) + ' more</li>' : "") + '</ul>';
+    });
+    html += '<div class="inline"><button class="btn alt" type="button" data-hand="all">Show them all</button><button class="link" type="button" data-hand="done">Got it</button></div>';
+  }
+  box.innerHTML = html + nameRow; box.hidden = false;
+}
+if ($("handBox")) $("handBox").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-hand]"); if (!b) return;
+  var act = b.getAttribute("data-hand");
+  if (act === "name" || act === "rename") {
+    var nm = act === "name" ? b.getAttribute("data-name") : prompt("Name this computer", DEVNAMES[DEVICE] || "");
+    if (nm && nm.trim()) { DEVNAMES[DEVICE] = nm.trim(); setDoc(doc(db, "users", uid, "devices", DEVICE), { name: nm.trim(), at: Date.now() }).catch(function () {}); render(); }
+    return;
+  }
+  if (act === "all") { cur = "new"; render(); window.scrollTo(0, $("handBox").offsetTop); return; }
+  if (act === "go") { var f = byId(b.getAttribute("data-id")); if (f) { cur = "new"; open[f.id] = true; render(); var el = document.querySelector('[data-row="' + f.id + '"]'); if (el) el.scrollIntoView({ block: "center" }); } return; }
+  if (act === "done") { markSeen(); LAST_SEEN = Date.now(); handHidden = true; render(); }
+});
