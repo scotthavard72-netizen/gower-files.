@@ -341,11 +341,21 @@ function download(path, name) {
   }).catch(fail("download"));
 }
 var foldersLoaded = false, filesLoaded = false, tidied = false;
-function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(clearAllOnce).then(tidyFoldersOnce).then(function () { return getDoc(doc(db, "users", uid, "meta", "lectures1")).then(function (s) { if (!s.exists()) return setDoc(doc(db, "users", uid, "meta", "lectures1"), { at: Date.now(), skipped: true }); }); }); } }
+function maybeTidy() { if (foldersLoaded && filesLoaded && !tidied) { tidied = true; removeUnitFolders().then(sortByLevel).then(clearAllOnce).then(tidyFoldersOnce).then(retagUntagged).then(function () { return getDoc(doc(db, "users", uid, "meta", "lectures1")).then(function (s) { if (!s.exists()) return setDoc(doc(db, "users", uid, "meta", "lectures1"), { at: Date.now(), skipped: true }); }); }); } }
 /* One-off: put files into Level 2 and Level 3. A file that came from a folder named "Level 2" or "Level 3" goes there;
    otherwise it goes by the year the file was last changed: 2025 or earlier is Level 2, 2026 onwards is Level 3. Uses the file's own date from your computer, not the upload date.
    Folders left empty afterwards are removed, except Home. Files in Home and in the bin are left alone. */
 var LEVEL_CUTOFF = Date.UTC(2026, 0, 1);
+/* Auto-saved Level 3 files that came in without a lecture (e.g. from a folder spelt differently) get one when their folder now matches. */
+function retagUntagged() {
+  var b = writeBatch(db), n = 0;
+  files.forEach(function (f) {
+    if (f.deletedAt || f.lecture || !f.rel) return;
+    var c = classifyRel(f.rel);
+    if (c.level === 3 && c.lecture) { b.update(doc(filecol(), f.id), { lecture: c.lecture }); n++; }
+  });
+  return n ? b.commit().catch(function () {}) : Promise.resolve();
+}
 function sortByLevel() {
   var flag = doc(db, "users", uid, "meta", "levels2");
   return getDoc(flag).then(function (s) {
@@ -627,7 +637,7 @@ function ensureFolder(name) {
    - a "level 2" / "Esports 2" folder anywhere in the path -> Level 2
    - otherwise Level 3, in the lecture that lecturer teaches (Kiran's coaching files go to Esports Coaching)
    - no lecturer folder: the unit number in the name (Unit 1-4), then words in the name, decide the lecture. */
-var LECTURER_LECTURE = { clive: "Enterprise & Entrepreneurship in Esports", kiran: "Introduction to Esports", leah: "Video Production", leigh: "Games Design", neil: "Esports Skills, Strategies and Analysis", sian: "Health, Wellbeing and Fitness for Esports Players", bernice: "ASBW", vicky: "GCSE Maths" };
+var LECTURER_LECTURE = { clive: "Enterprise & Entrepreneurship in Esports", kiran: "Introduction to Esports", leah: "Video Production", leigh: "Games Design", neil: "Esports Skills, Strategies and Analysis", sian: "Health, Wellbeing and Fitness for Esports Players", bernice: "ASBW", berince: "ASBW", vicky: "GCSE Maths" };
 var UNIT_LECTURE = { 1: "Introduction to Esports", 2: "Esports Skills, Strategies and Analysis", 3: "Enterprise & Entrepreneurship in Esports", 4: "Health, Wellbeing and Fitness for Esports Players" };
 function classifyRel(rel) {
   var parts = rel.split("/"), name = parts[parts.length - 1], dirs = parts.slice(0, -1);
@@ -635,6 +645,7 @@ function classifyRel(rel) {
   if (level2) return { level: 2, lecture: "" };
   var lec = "";
   dirs.forEach(function (d) { var k = d.trim().split(/\s+/)[0].toLowerCase(); if (!lec && LECTURER_LECTURE[k]) lec = LECTURER_LECTURE[k]; });
+  if (!lec && dirs.some(function (d) { return /w(e)?lsh\s*bac|welsh\s*bacc|\basbw\b|baccalaureate/i.test(d); })) lec = "ASBW";
   if (lec === "Introduction to Esports" && /coach/i.test(name)) lec = "Esports Coaching";
   if (!lec) { var u = /unit[\s_-]*(\d+)/i.exec(name); if (u && UNIT_LECTURE[+u[1]]) lec = UNIT_LECTURE[+u[1]]; }
   if (!lec) lec = lectureScore(name.replace(/[_\-.]+/g, " "));
