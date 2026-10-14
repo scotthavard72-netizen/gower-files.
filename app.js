@@ -1145,13 +1145,13 @@ function queueJarvis() {
 }
 function pushJarvis() {
   var list = files.filter(function (f) { return !f.deletedAt; }).sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 2000).map(function (f) {
-    return { i: f.id, n: f.name, l: f.lecture || "", f: folderName(f.folder), t: changedAt(f), s: f.size || 0, d: DEVNAMES[f.by] || "" };
+    return { i: f.id, n: f.name, l: f.lecture || "", f: folderName(f.folder), t: changedAt(f), s: f.size || 0, d: DEVNAMES[f.by] || "", x: f.tx && f.tx >= changedAt(f) ? 1 : 0 };
   });
   var body = JSON.stringify(list);
   if (body === JV.last) return;
   var out = JSON.stringify({ v: 1, at: Date.now(), app: location.origin + location.pathname, files: list });
   uploadBytes(ref(storage, jarvisPath()), new Blob([out], { type: "application/json" }), { contentType: "application/json", cacheControl: "no-cache, max-age=0", customMetadata: { exp: String(Date.now() + 3650 * DAY) } })
-    .then(function () { JV.last = body; JV.state = "Up to date · " + list.length + " files"; renderJarvis(); })
+    .then(function () { JV.last = body; JV.state = "Up to date · " + list.length + " files"; renderJarvis(); queueText(); })
     .catch(function (e) { JV.state = "Couldn't update (" + (e.code || e.message) + ")"; renderJarvis(); });
 }
 function renderJarvis() {
@@ -1161,3 +1161,54 @@ function renderJarvis() {
   $("jvState").textContent = JV.state;
 }
 $("jvCopy").addEventListener("click", function (e) { copyText(jarvisCode(), e.target); });
+
+
+/* ---------- Jarvis: text extracts ----------
+   So Jarvis can *read* a file (revision quizzes, "what's in my worksheet"), a plain-text copy of each document is kept next to
+   the list, at share/<you>/<token>/text-<id>.txt. Word, PowerPoint and Excel are unzipped in the browser; PDFs go through
+   pdf.js; txt/md/csv as they are. One file at a time, newest first, each only once (the file's doc gets tx = when). */
+var TX = { busy: false, failed: {} };
+function txPath(id) { return "share/" + uid + "/" + JV.token + "/text-" + id + ".txt"; }
+function unxml(x) {
+  return x.replace(/<\/(w:p|a:p|si|p)>/g, "\n").replace(/<w:tab\/>/g, "\t").replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, function (m, c) { return String.fromCharCode(c); });
+}
+async function extractText(f, blob) {
+  var n = f.name.toLowerCase();
+  if (/\.(txt|md|csv|json|html?)$/.test(n)) return (n.endsWith("html") || n.endsWith("htm") ? unxml(await blob.text()) : await blob.text()).slice(0, 80000);
+  if (/\.(docx|pptx|xlsx)$/.test(n)) {
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", "JSZip");
+    var z = await JSZip.loadAsync(blob), parts = [];
+    var names = Object.keys(z.files).filter(function (q) { return /^word\/document\.xml$|^ppt\/slides\/slide\d+\.xml$|^ppt\/notesSlides\/notesSlide\d+\.xml$|^xl\/sharedStrings\.xml$/.test(q); })
+      .sort(function (a, b) { return (parseInt((a.match(/\d+/) || [0])[0]) - parseInt((b.match(/\d+/) || [0])[0])) || a.localeCompare(b); });
+    for (var i = 0; i < names.length; i++) {
+      var xml = await z.file(names[i]).async("string");
+      var lab = /slide(\d+)\.xml$/.exec(names[i]);
+      parts.push((lab ? "[Slide " + lab[1] + "]\n" : "") + unxml(xml));
+    }
+    return parts.join("\n\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").slice(0, 80000);
+  }
+  if (/\.pdf$/.test(n)) {
+    var pdfjs = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.mjs";
+    var pdf = await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise, out = [];
+    for (var p = 1; p <= Math.min(pdf.numPages, 60); p++) { var pg = await pdf.getPage(p); var tc = await pg.getTextContent(); out.push("[Page " + p + "]\n" + tc.items.map(function (it) { return it.str; }).join(" ")); }
+    return out.join("\n\n").slice(0, 80000);
+  }
+  return null;
+}
+function queueText() {
+  if (!JV.token || TX.busy || !filesLoaded) return;
+  var f = files.filter(function (x) { return !x.deletedAt && x.path && !TX.failed[x.id] && !(x.tx && x.tx >= changedAt(x)) && /\.(docx|pptx|xlsx|pdf|txt|md|csv|json|html?)$/i.test(x.name) && (x.size || 0) < 25e6; })
+    .sort(function (a, b) { return changedAt(b) - changedAt(a); })[0];
+  if (!f) return;
+  TX.busy = true;
+  getBlob(ref(storage, f.path)).then(function (blob) { return extractText(f, blob); }).then(function (text) {
+    if (text == null) throw new Error("unsupported");
+    var meta = "# " + f.name + (f.lecture ? "\n# Lecture: " + f.lecture : "") + "\n\n";
+    return uploadBytes(ref(storage, txPath(f.id)), new Blob([meta + text], { type: "text/plain" }),
+      { contentType: "text/plain; charset=utf-8", cacheControl: "no-cache, max-age=0", customMetadata: { exp: String(Date.now() + 3650 * DAY) } })
+      .then(function () { return updateDoc(doc(filecol(), f.id), { tx: Date.now() }); });
+  }).catch(function () { TX.failed[f.id] = true; }).then(function () { TX.busy = false; setTimeout(queueText, 1500); });
+}
