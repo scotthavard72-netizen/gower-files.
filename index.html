@@ -124,6 +124,11 @@ details.fold > summary { padding: 12px 14px; cursor: pointer; font: 700 1rem var
     </div>
     <div id="syncNewer"></div>
   </section>
+  <details class="sync" id="jarvisBox" hidden>
+    <summary class="syncrow"><b>Jarvis</b><span class="hint" id="jvState"></span></summary>
+    <div class="hint">Jarvis can see the names, lectures and dates of your files (not the files themselves) and open them here. Paste this code into Jarvis once, under Settings › Gower Files.</div>
+    <div class="inline"><input type="text" readonly id="jvCode" aria-label="Code for Jarvis"><button class="btn alt" type="button" id="jvCopy">Copy</button></div>
+  </details>
   <div class="drop" id="drop">
     <div><b>Drop files here</b> or</div>
     <div class="inline" style="justify-content:center;flex-wrap:wrap">

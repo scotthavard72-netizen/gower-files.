@@ -91,9 +91,10 @@ function start() {
     b.set(initRef, { at: Date.now() });
     return b.commit();
   }).catch(function (e) { note("Couldn't set up folders: " + e.message); });
+  initJarvis();
   unsubs.push(onSnapshot(fcol(), function (s) {
     folders = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; }).sort(function (a, b) { return (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(b.name); });
-    foldersLoaded = true; maybeTidy();
+    foldersLoaded = true; maybeTidy(); queueJarvis();
     if (!SY.inited) { SY.inited = true; initSync(); } else renderSync();
     liveRender();
   }, function (e) { note("Can't load folders: " + e.message); }));
@@ -104,7 +105,7 @@ function start() {
   unsubs.push(onSnapshot(filecol(), function (s) {
     files = s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; });
     if (!purged) { purged = true; purgeBin(); cleanShares(); }
-    filesLoaded = true; maybeTidy();
+    filesLoaded = true; maybeTidy(); queueJarvis();
     liveRender();
   }, function (e) { note("Can't load files: " + e.message); }));
 }
@@ -132,16 +133,17 @@ function liveRender() { if (editing || isTyping()) { pending = true; return; } r
 document.addEventListener("focusout", function () { setTimeout(function () { if (pending && !editing && !isTyping()) render(); }, 0); });
 
 /* ---------- render ---------- */
-var urlApplied = false;
+var urlApplied = false, openFromUrl = "";
 function applyUrl() {
   if (urlApplied || !folders.length) return;
   urlApplied = true;
   try {
-    var p = new URLSearchParams(location.search), fo = p.get("folder"), q = p.get("q"), lec = p.get("lecture");
+    var p = new URLSearchParams(location.search), fo = p.get("folder"), q = p.get("q"), lec = p.get("lecture"), fl = p.get("file");
+    if (fl) openFromUrl = fl;
     if (lec) { var ln = LECTURE_NAMES.filter(function (n) { return n.toLowerCase() === lec.toLowerCase(); })[0]; if (ln) cur = "lec:" + ln; }
     if (fo) { var m = folders.filter(function (f) { return String(f.name).toLowerCase() === fo.toLowerCase(); })[0]; if (m) cur = m.id; }
     if (q) $("q").value = q;
-    if (fo || q || lec) history.replaceState(null, "", location.pathname);
+    if (fo || q || lec || fl) history.replaceState(null, "", location.pathname);
   } catch (e) {}
 }
 function londonParts(d) {
@@ -175,6 +177,8 @@ try { autoFile = localStorage.getItem("gf-autofile") !== "off"; } catch (e) {}
 function render() {
   pending = false;
   applyUrl();
+  /* ?file=<id> (from Jarvis) opens that file's preview once the list has loaded. */
+  if (openFromUrl && filesLoaded) { var of = byId(openFromUrl); openFromUrl = ""; if (of && !of.deletedAt) setTimeout(function () { preview(of.id); }, 0); }
   var live = files.filter(function (f) { return !f.deletedAt; }), binned = files.filter(function (f) { return f.deletedAt; });
   var now = Date.now(), recent = live.filter(function (f) { return now - changedAt(f) < RECENT_DAYS * DAY; });
   var today = londonParts().date, todays = live.filter(function (f) { return f.today === today; });
@@ -1115,3 +1119,45 @@ if ($("handBox")) $("handBox").addEventListener("click", function (e) {
   if (act === "go") { var f = byId(b.getAttribute("data-id")); if (f) { cur = "new"; open[f.id] = true; render(); var el = document.querySelector('[data-row="' + f.id + '"]'); if (el) el.scrollIntoView({ block: "center" }); } return; }
   if (act === "done") { markSeen(); LAST_SEEN = Date.now(); handHidden = true; render(); }
 });
+
+/* ---------- Jarvis link ----------
+   Jarvis (Scott's assistant page on claude.ai) can't sign in here, so a list of your files is kept at a secret address
+   under share/ that only Jarvis knows: names, lectures, folders, sizes and dates, never the files themselves.
+   The address is made once (users/<you>/meta/jarvis) and the list is refreshed a few seconds after anything changes.
+   The code to paste into Jarvis is shown in the Jarvis box. */
+var JV = { token: "", last: "", timer: null, state: "" };
+function jarvisPath() { return "share/" + uid + "/" + JV.token + "/jarvis.json"; }
+function jarvisCode() { return JV.token ? uid + "." + JV.token : ""; }
+function initJarvis() {
+  var r = doc(db, "users", uid, "meta", "jarvis");
+  getDoc(r).then(function (s) {
+    var t = s.exists() ? s.data().token : "";
+    if (t) return t;
+    var a = new Uint8Array(18); crypto.getRandomValues(a);
+    t = Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+    return setDoc(r, { token: t, at: Date.now() }).then(function () { return t; });
+  }).then(function (t) { JV.token = t; renderJarvis(); queueJarvis(); }).catch(function (e) { JV.state = "Couldn't set up (" + (e.code || e.message) + ")"; renderJarvis(); });
+}
+function queueJarvis() {
+  if (!JV.token || !filesLoaded || !foldersLoaded) return;
+  clearTimeout(JV.timer);
+  JV.timer = setTimeout(pushJarvis, 4000);
+}
+function pushJarvis() {
+  var list = files.filter(function (f) { return !f.deletedAt; }).sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 2000).map(function (f) {
+    return { i: f.id, n: f.name, l: f.lecture || "", f: folderName(f.folder), t: changedAt(f), s: f.size || 0, d: DEVNAMES[f.by] || "" };
+  });
+  var body = JSON.stringify(list);
+  if (body === JV.last) return;
+  var out = JSON.stringify({ v: 1, at: Date.now(), app: location.origin + location.pathname, files: list });
+  uploadBytes(ref(storage, jarvisPath()), new Blob([out], { type: "application/json" }), { contentType: "application/json", cacheControl: "no-cache, max-age=0", customMetadata: { exp: String(Date.now() + 3650 * DAY) } })
+    .then(function () { JV.last = body; JV.state = "Up to date · " + list.length + " files"; renderJarvis(); })
+    .catch(function (e) { JV.state = "Couldn't update (" + (e.code || e.message) + ")"; renderJarvis(); });
+}
+function renderJarvis() {
+  var box = $("jarvisBox"); if (!box) return;
+  box.hidden = !JV.token;
+  $("jvCode").value = jarvisCode();
+  $("jvState").textContent = JV.state;
+}
+$("jvCopy").addEventListener("click", function (e) { copyText(jarvisCode(), e.target); });
