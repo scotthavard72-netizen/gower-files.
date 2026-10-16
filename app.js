@@ -1145,7 +1145,7 @@ function queueJarvis() {
 }
 function pushJarvis() {
   var list = files.filter(function (f) { return !f.deletedAt; }).sort(function (a, b) { return changedAt(b) - changedAt(a); }).slice(0, 2000).map(function (f) {
-    return { i: f.id, n: f.name, l: f.lecture || "", f: folderName(f.folder), t: changedAt(f), s: f.size || 0, d: DEVNAMES[f.by] || "", x: f.tx && f.tx >= changedAt(f) ? 1 : 0 };
+    return { i: f.id, n: f.name, l: f.lecture || "", f: folderName(f.folder), p: f.rel || "", t: changedAt(f), s: f.size || 0, d: DEVNAMES[f.by] || "", v: (f.versions || []).length, x: f.tx && f.tx >= changedAt(f) ? 1 : 0 };
   });
   var body = JSON.stringify(list);
   if (body === JV.last) return;
@@ -1154,9 +1154,12 @@ function pushJarvis() {
     .then(function () { JV.last = body; JV.state = "Up to date · " + list.length + " files"; renderJarvis(); queueText(); })
     .catch(function (e) { JV.state = "Couldn't update (" + (e.code || e.message) + ")"; renderJarvis(); });
 }
+var jvOpenSet = false;
 function renderJarvis() {
   var box = $("jarvisBox"); if (!box) return;
   box.hidden = !JV.token;
+  /* Open until it has been closed once on this computer, so the code is easy to find. */
+  if (!jvOpenSet) { jvOpenSet = true; var c = null; try { c = localStorage.getItem("gf-jv-closed"); } catch (e) {} box.open = c !== "1"; box.addEventListener("toggle", function () { try { localStorage.setItem("gf-jv-closed", box.open ? "0" : "1"); } catch (e) {} }); }
   $("jvCode").value = jarvisCode();
   $("jvState").textContent = JV.state;
 }
